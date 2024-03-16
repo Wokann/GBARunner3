@@ -7,6 +7,8 @@
 #include "cp15.h"
 #include "Cpsr.h"
 #include "SdCache.h"
+#include "MemCopy.h"
+#include "Slot2.h"
 
 typedef struct
 {
@@ -37,6 +39,8 @@ static DWORD sClusterTable[512];
 
 // temporarily
 extern FIL gFile;
+
+extern bool gSlot2Active;
 
 /// @brief Returns a cache block to replace.
 /// @return The index of the cache block to replace.
@@ -136,7 +140,15 @@ static void fillOutOfBoundsCacheBlock(u32 romBlock, u32 cacheBlock)
 /// @param dst The destination buffer.
 static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
 {
-    u32 sector = getSdSectorOfRomBlock(romBlock);
+    // If using SLOT2, we don't need to unscramble our romblock cache. 
+    u32 sector = 0;
+    if(!gSlot2Active) {
+        sector = getSdSectorOfRomBlock(romBlock);
+        if (sector == 0)
+        {
+            return &sdc_cache[0][0];
+        }
+    }
 
     u32 irqs = fs_waitForCompletionOfCurrentTransaction(true);
     if (isCurrentlyFetching())
@@ -180,39 +192,54 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
         sdc_romBlockToCacheBlock[oldRomBlock] = NULL;
         sCacheBlockToRomBlock[cacheBlock] = SDC_ROM_BLOCK_INVALID;
     }
-
+    
+    // SLOT2 copies the block afterwards, rather than pulling from the SD Cache here.
     FsWaitToken waitToken;
-    if (sector != 0)
-    {
-        fs_readCacheAlignedSectorsAsync(
-            gFile.obj.fs->pdrv == DEV_FAT ? FS_DEVICE_DLDI : FS_DEVICE_DSI_SD,
-            &sdc_cache[cacheBlock][0], sector,
-            SDC_BLOCK_SIZE / 512, &waitToken);
-        sCurrentFetch.romBlock = romBlock;
-        sCurrentFetch.cacheBlock = cacheBlock;
-    }
+
+    if(!gSlot2Active){
+        if (sector != 0)
+        {
+            fs_readCacheAlignedSectorsAsync(
+                gFile.obj.fs->pdrv == DEV_FAT ? FS_DEVICE_DLDI : FS_DEVICE_DSI_SD,
+                &sdc_cache[cacheBlock][0], sector,
+                SDC_BLOCK_SIZE / 512, &waitToken);
+            sCurrentFetch.romBlock = romBlock;
+            sCurrentFetch.cacheBlock = cacheBlock;
+        }
+    } //else memset(&waitToken, 0, sizeof(FsWaitToken));
+    sCurrentFetch.romBlock = romBlock;
+    sCurrentFetch.cacheBlock = cacheBlock;
 
     bool decreaseTabuLevel = false;
     if ((arm_getCpsr() & 0x1F) != 0x12 && sTabuLevel < 2)
     {
+        if(gSlot2Active) arm_disableIrqs();
         sTabuBlocks[sTabuLevel++] = cacheBlock;
         decreaseTabuLevel = true;
     }
-
     arm_restoreIrqs(irqs);
-    if (sector != 0)
-    {
-        irqs = fs_waitForCompletion(&waitToken, true);
-        if (sCurrentFetch.romBlock == romBlock)
-        {
-            finishFetch();
-        }
+
+    if(gSlot2Active) {
+        mem_copy32((void*)(0x08000000 + (romBlock * SDC_BLOCK_SIZE)), &sdc_cache[cacheBlock][0], SDC_BLOCK_SIZE);
         arm_restoreIrqs(irqs);
-    }
-    else
-    {
         fillOutOfBoundsCacheBlock(romBlock, cacheBlock);
     }
+    else {
+        if (sector != 0)
+        {
+            irqs = fs_waitForCompletion(&waitToken, true);
+            if (sCurrentFetch.romBlock == romBlock)
+            {
+                finishFetch();
+            }
+            arm_restoreIrqs(irqs);
+        }
+        else
+        {
+            fillOutOfBoundsCacheBlock(romBlock, cacheBlock);
+        }
+    }
+
 
     if (decreaseTabuLevel)
     {
@@ -221,7 +248,6 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
 
     return &sdc_cache[cacheBlock][0];
 }
-
 extern void logAddress(u32 address);
 
 const void* sdc_loadRomBlockDirect(u32 romAddress)
@@ -275,11 +301,14 @@ void sdc_init(void)
     gIrqYieldingEnabled = true;
 
     sClusterTable[0] = sizeof(sClusterTable) / sizeof(DWORD);
-    gFile.cltbl = sClusterTable;
-    u32 result = f_lseek(&gFile, CREATE_LINKMAP);
-    if (result != FR_OK)
-    {
-        logAddress(0xDEADBEEF);
-        logAddress(result);
+
+    if(!gSlot2Active){
+        gFile.cltbl = sClusterTable;
+        u32 result = f_lseek(&gFile, CREATE_LINKMAP);
+        if (result != FR_OK)
+        {
+            logAddress(0xDEADBEEF);
+            logAddress(result);
+        }
     }
 }

@@ -4,7 +4,7 @@
 #include "AsmMacros.inc"
 
 arm_func sav_swiHandler
-    cmp r13, #0x90
+/*    cmp r13, #0x90
         beq sav_swiReadSaveByte
     cmp r13, #0x91
         beq sav_swiWriteSaveByte
@@ -26,7 +26,7 @@ arm_func sav_swiHandler
     msr cpsr_c, #0x10
     blx r12
     pop {lr}
-    bx lr
+*/    bx lr
 
 .global sav_swiTable
 sav_swiTable:

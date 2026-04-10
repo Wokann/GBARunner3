@@ -139,7 +139,7 @@ arm_func memu_store32Rom
     bx lr
 
 arm_func memu_store32Sram
-    tst r8, #3
+/*    tst r8, #3
         bxne lr
     ldr r10,= gSaveData
     mov r11, r8, lsl #17
@@ -157,4 +157,4 @@ arm_func memu_store32Sram
     ldr r12,= emu_vblankIrqSkipSaveCheckInstruction
     mcr p15, 0, r11, c7, c10, 4 // drain write buffer
     str r11, [r12] // nop, do not skip the save check when dirty
-    bx lr
+*/    bx lr

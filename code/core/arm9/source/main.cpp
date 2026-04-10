@@ -224,7 +224,7 @@ static void disableSramWrites(void)
 }
 
 static void handleSave(const char* savePath)
-{
+{/*
     const auto& gameSettings = gAppSettingsService.GetAppSettings().gameSettings;
     if (gameSettings.saveType == GbaSaveType::None)
     {
@@ -259,7 +259,7 @@ static void handleSave(const char* savePath)
         }
     }
 
-    sav_initializeSave(saveTypeInfo, savePath);
+    sav_initializeSave(saveTypeInfo, savePath);*/
 }
 
 extern "C" void logAddress(u32 address)

@@ -15,35 +15,35 @@
 
 static constexpr auto sSaveTypeInfos = std::to_array<const SaveTypeInfo>
 ({
-    {"EEPROM_V111", 12, SAVE_TYPE_EEPROM_V111, 512, eeprom_patchV111},
-    {"EEPROM_V120", 12, SAVE_TYPE_EEPROM_V120, 8 * 1024, eeprom_patchV120},
-    {"EEPROM_V121", 12, SAVE_TYPE_EEPROM_V121, 8 * 1024, eeprom_patchV120},
-    {"EEPROM_V122", 12, SAVE_TYPE_EEPROM_V122, 8 * 1024, eeprom_patchV120},
-    {"EEPROM_V124", 12, SAVE_TYPE_EEPROM_V124, 8 * 1024, eeprom_patchV124},
-    {"EEPROM_V125", 12, SAVE_TYPE_EEPROM_V125, 8 * 1024, eeprom_patchV124},
-    {"EEPROM_V126", 12, SAVE_TYPE_EEPROM_V126, 8 * 1024, eeprom_patchV126},
+    {"EEPROM_V111", 12, SAVE_TYPE_EEPROM_V111, 512, nullptr},
+    {"EEPROM_V120", 12, SAVE_TYPE_EEPROM_V120, 8 * 1024, nullptr},
+    {"EEPROM_V121", 12, SAVE_TYPE_EEPROM_V121, 8 * 1024, nullptr},
+    {"EEPROM_V122", 12, SAVE_TYPE_EEPROM_V122, 8 * 1024, nullptr},
+    {"EEPROM_V124", 12, SAVE_TYPE_EEPROM_V124, 8 * 1024, nullptr},
+    {"EEPROM_V125", 12, SAVE_TYPE_EEPROM_V125, 8 * 1024, nullptr},
+    {"EEPROM_V126", 12, SAVE_TYPE_EEPROM_V126, 8 * 1024, nullptr},
 
-    {"FLASH_V120", 11, SAVE_TYPE_FLASH_V120, 64 * 1024, flash_patchV120},
-    {"FLASH_V121", 11, SAVE_TYPE_FLASH_V121, 64 * 1024, flash_patchV120},
-    {"FLASH_V123", 11, SAVE_TYPE_FLASH_V123, 64 * 1024, flash_patchV123},
-    {"FLASH_V124", 11, SAVE_TYPE_FLASH_V124, 64 * 1024, flash_patchV123},
-    {"FLASH_V125", 11, SAVE_TYPE_FLASH_V125, 64 * 1024, flash_patchV123},
-    {"FLASH_V126", 11, SAVE_TYPE_FLASH_V126, 64 * 1024, flash_patchV126},
-    {"FLASH512_V130", 14, SAVE_TYPE_FLASH512_V130, 64 * 1024, flash_patch512V130},
-    {"FLASH512_V131", 14, SAVE_TYPE_FLASH512_V131, 64 * 1024, flash_patch512V130},
-    {"FLASH512_V133", 14, SAVE_TYPE_FLASH512_V133, 64 * 1024, flash_patch512V130},
-    {"FLASH1M_V102", 13, SAVE_TYPE_FLASH1M_V102, 128 * 1024, flash_patch1MV102},
-    {"FLASH1M_V103", 13, SAVE_TYPE_FLASH1M_V103, 128 * 1024, flash_patch1MV103 },
+    {"FLASH_V120", 11, SAVE_TYPE_FLASH_V120, 64 * 1024, nullptr},
+    {"FLASH_V121", 11, SAVE_TYPE_FLASH_V121, 64 * 1024, nullptr},
+    {"FLASH_V123", 11, SAVE_TYPE_FLASH_V123, 64 * 1024, nullptr},
+    {"FLASH_V124", 11, SAVE_TYPE_FLASH_V124, 64 * 1024, nullptr},
+    {"FLASH_V125", 11, SAVE_TYPE_FLASH_V125, 64 * 1024, nullptr},
+    {"FLASH_V126", 11, SAVE_TYPE_FLASH_V126, 64 * 1024, nullptr},
+    {"FLASH512_V130", 14, SAVE_TYPE_FLASH512_V130, 64 * 1024, nullptr},
+    {"FLASH512_V131", 14, SAVE_TYPE_FLASH512_V131, 64 * 1024, nullptr},
+    {"FLASH512_V133", 14, SAVE_TYPE_FLASH512_V133, 64 * 1024, nullptr},
+    {"FLASH1M_V102", 13, SAVE_TYPE_FLASH1M_V102, 128 * 1024, nullptr},
+    {"FLASH1M_V103", 13, SAVE_TYPE_FLASH1M_V103, 128 * 1024, nullptr },
 
     //Fast SRAM does not require patching
     {"SRAM_F_V100", 12, SAVE_TYPE_SRAM_F_V100, 32 * 1024, nullptr},
     {"SRAM_F_V102", 12, SAVE_TYPE_SRAM_F_V102, 32 * 1024, nullptr},
     {"SRAM_F_V103", 12, SAVE_TYPE_SRAM_F_V103, 32 * 1024, nullptr},
 
-    {"SRAM_V110", 10, SAVE_TYPE_SRAM_V110, 32 * 1024, sram_patchV110},
-    {"SRAM_V111", 10, SAVE_TYPE_SRAM_V111, 32 * 1024, sram_patchV111},
-    {"SRAM_V112", 10, SAVE_TYPE_SRAM_V112, 32 * 1024, sram_patchV111},
-    {"SRAM_V113", 10, SAVE_TYPE_SRAM_V113, 32 * 1024, sram_patchV111},
+    {"SRAM_V110", 10, SAVE_TYPE_SRAM_V110, 32 * 1024, nullptr},
+    {"SRAM_V111", 10, SAVE_TYPE_SRAM_V111, 32 * 1024, nullptr},
+    {"SRAM_V112", 10, SAVE_TYPE_SRAM_V112, 32 * 1024, nullptr},
+    {"SRAM_V113", 10, SAVE_TYPE_SRAM_V113, 32 * 1024, nullptr},
 });
 
 const SaveTypeInfo* SaveTagScanner::FindSaveTag(FIL* romFile, u8* tempBuffer, u32& tagRomAddress)

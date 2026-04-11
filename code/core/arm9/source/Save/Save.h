@@ -13,6 +13,7 @@ extern FIL gSaveFile;
 extern gba_save_shared_t gGbaSaveShared;
 
 extern u32 emu_vblankIrqSkipSaveCheckInstruction;
+extern bool g_useSlot2Save;
 
 bool sav_tryPatchFunction(const u32* signature, u32 saveSwiNumber, void* patchFunction);
 void sav_initializeSave(const SaveTypeInfo* saveTypeInfo, const char* savePath);

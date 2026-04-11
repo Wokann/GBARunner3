@@ -12,7 +12,10 @@
 #include "SdCache/SdCache.h"
 #include "IpcChannels.h"
 #include "GbaSaveIpcCommand.h"
+#include <nds/bios.h>
+#include <nds/memory.h>
 #include "Save.h"
+#include <libtwl/mem/memExtern.h>
 
 #define DEFAULT_SAVE_SIZE   (32 * 1024)
 
@@ -27,6 +30,9 @@ gba_save_shared_t gGbaSaveShared;
 
 static DWORD sClusterTable[64];
 static u32 sSkipSaveCheckInstruction;
+
+// Slot2 GBA cart save support
+bool g_useSlot2Save = true;
 
 // temporarily
 extern FIL gFile;
@@ -103,7 +109,17 @@ void sav_initializeSave(const SaveTypeInfo* saveTypeInfo, const char* savePath)
         memset((void*)ISNITRO_SAVE_BUFFER, SAVE_DATA_FILL, ISNITRO_SAVE_BUFFER_SIZE);
     }
     memset(&gSaveFile, 0, sizeof(gSaveFile));
-    if (f_open(&gSaveFile, savePath, FA_OPEN_EXISTING | FA_READ | FA_WRITE) == FR_OK)
+    
+    if (g_useSlot2Save && (saveTypeInfo->type & SAVE_TYPE_SRAM))  
+    {
+        mem_setGbaCartridgeCpu(EXMEMCNT_SLOT2_CPU_ARM9);  
+        const vu8* slot2Sram = (const vu8*)0x0A000000;  
+        for (u32 i = 0; i < saveSize && i < SAVE_DATA_SIZE; i++)  
+            gSaveData[i] = slot2Sram[i];  
+    }
+    else
+        g_useSlot2Save = false;
+    if (f_open(&gSaveFile, savePath, FA_OPEN_EXISTING | FA_READ | FA_WRITE) == FR_OK && !g_useSlot2Save)
     {
         bool clusterMapLoaded = false;
         u32 initialSize = f_size(&gSaveFile);
@@ -138,7 +154,7 @@ void sav_initializeSave(const SaveTypeInfo* saveTypeInfo, const char* savePath)
             f_read(&gSaveFile, (void*)ISNITRO_SAVE_BUFFER, saveSize, &read);
         }
     }
-    else if (!Environment::IsIsNitroEmulator())
+    else if (!Environment::IsIsNitroEmulator() && !g_useSlot2Save)
     {
         if (f_open(&gSaveFile, savePath, FA_CREATE_NEW | FA_READ | FA_WRITE) == FR_OK)
         {
@@ -224,10 +240,19 @@ extern "C" void sav_writeSaveToFile(void)
 {
     if (gGbaSaveShared.saveDataSize != 0 && !Environment::IsIsNitroEmulator())
     {
+        if (g_useSlot2Save)  
+        {
+            mem_setGbaCartridgeCpu(EXMEMCNT_SLOT2_CPU_ARM9);  
+            vu8* slot2Sram = (vu8*)0x0A000000;  
+            for (u32 i = 0; i < gGbaSaveShared.saveDataSize; i++)  
+                slot2Sram[i] = gSaveData[i];
+        }
+        else{
         f_lseek(&gSaveFile, 0);
         UINT bytesWritten = 0;
         f_write(&gSaveFile, gSaveData, gGbaSaveShared.saveDataSize, &bytesWritten);
         f_sync(&gSaveFile);
+        }
     }
 
     gGbaSaveShared.saveState = GBA_SAVE_STATE_CLEAN;

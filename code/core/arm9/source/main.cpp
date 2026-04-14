@@ -260,9 +260,13 @@ static void handleSave(const char* savePath)
         {
             disableSramWrites();
         }
+    } 
+      
+    if (g_useSlot2Save) {   
+        sav_initializeSave(saveTypeInfo, "_gba/slot2.sav");
     }
-
-    sav_initializeSave(saveTypeInfo, savePath);
+    else
+        sav_initializeSave(saveTypeInfo, savePath);
 }
 
 extern "C" void logAddress(u32 address)

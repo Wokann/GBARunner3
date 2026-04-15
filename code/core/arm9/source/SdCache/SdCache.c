@@ -7,6 +7,7 @@
 #include "cp15.h"
 #include "Cpsr.h"
 #include "SdCache.h"
+#include "Patches/ExternalPatch.h"
 
 typedef struct
 {
@@ -37,6 +38,7 @@ static DWORD sClusterTable[512];
 
 // temporarily
 extern FIL gFile;
+extern FIL gExternalPatchFile;
 
 /// @brief Returns a cache block to replace.
 /// @return The index of the cache block to replace.
@@ -206,6 +208,7 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
         if (sCurrentFetch.romBlock == romBlock)
         {
             finishFetch();
+            externalPatch_applyHicodeBlock(romBlock, &sdc_cache[cacheBlock][0]);  
         }
         arm_restoreIrqs(irqs);
     }

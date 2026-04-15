@@ -40,6 +40,7 @@
 #include "Application/GbaBorderService.h"
 #include "Application/SplashScreen.h"
 #include "Patches/PatchSwi.h"
+#include "Patches/ExternalPatch.h"
 #include "Patches/SelfModifyingPatches.h"
 #include "Emulator/BootAnimationSkip.h"
 #include "MemoryEmulator/Arm/ArmDispatchTable.h"
@@ -52,6 +53,7 @@
 #define BIOS_FILE_PATH                  "/_gba/bios.bin"
 #define SETTINGS_FILE_PATH              "/_gba/gbarunner3.json"
 #define GAME_SETTINGS_FILE_PATH_FORMAT  "/_gba/configs/%c%c%c%c%02X.json"
+#define GAME_PATCH_FILE_PATH_FORMAT     "/_gba/titles/%c%c%c%c%02X.patch"
 
 [[gnu::section(".ewram.bss")]]
 FATFS gFatFs;
@@ -59,6 +61,8 @@ FATFS gFatFs;
 FIL gFile;
 [[gnu::section(".ewram.bss")]]
 GbaHeader gRomHeader;
+[[gnu::section(".ewram.bss")]]
+FIL gExternalPatchFile;
 
 [[gnu::section(".vramhi.bss")]]
 u32 gGbaBios[16 * 1024 / 4] alignas(256);
@@ -199,6 +203,8 @@ static void loadGbaRom(const char* romPath)
     f_lseek(&gFile, ROM_LINEAR_GBA_ADDRESS - 0x08000000);
     f_read(&gFile, (void*)ROM_LINEAR_DS_ADDRESS, ROM_LINEAR_SIZE, &br);
 
+    if (gExternalPatch.TryLoad(gRomHeader))
+        gExternalPatch.ApplyLinearPatches();
     HarvestMoonPatches().TryApplyPatches(gRomHeader.gameCode);
     if (BadMixerPatch().TryApplyPatch())
     {

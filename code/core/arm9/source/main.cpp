@@ -204,7 +204,7 @@ static void loadGbaRom(const char* romPath)
     f_read(&gFile, (void*)ROM_LINEAR_DS_ADDRESS, ROM_LINEAR_SIZE, &br);
 
     if (gExternalPatch.TryLoad(gRomHeader))
-        gExternalPatch.ApplyLinearPatches();
+        for(u16 i = 0; i < 512; i++) gExternalPatch.ApplyRomBlockPatches(i, (u8*)ROM_LINEAR_DS_ADDRESS + i * SDC_BLOCK_SIZE);
     HarvestMoonPatches().TryApplyPatches(gRomHeader.gameCode);
     if (BadMixerPatch().TryApplyPatch())
     {

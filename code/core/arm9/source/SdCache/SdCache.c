@@ -208,7 +208,6 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
         if (sCurrentFetch.romBlock == romBlock)
         {
             finishFetch();
-            externalPatch_applyHicodeBlock(romBlock, &sdc_cache[cacheBlock][0]);  
         }
         arm_restoreIrqs(irqs);
     }
@@ -216,6 +215,11 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     {
         fillOutOfBoundsCacheBlock(romBlock, cacheBlock);
     }
+    
+    arm_restoreIrqs(irqs);
+    irqs = fs_waitForCompletion(&waitToken, true);
+    externalPatch_applyRomBlock(romBlock, &sdc_cache[cacheBlock][0]);  
+    arm_restoreIrqs(irqs);
 
     if (decreaseTabuLevel)
     {

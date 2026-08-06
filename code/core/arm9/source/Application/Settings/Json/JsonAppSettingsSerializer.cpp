@@ -33,6 +33,7 @@
 
 #define KEY_GAME_SETTINGS                           "gameSettings"
 #define KEY_GAME_SETTINGS_SAVE_TYPE                 "saveType"
+#define KEY_GAME_SETTINGS_SLOT2_SAVE                "slot2Save"
 
 #define ENUM_STRING_GBA_SCREEN_TOP                  "top"
 #define ENUM_STRING_GBA_SCREEN_BOTTOM               "bottom"
@@ -251,6 +252,7 @@ static void readGameSettings(const JsonObjectConst& json, GameSettings& gameSett
         return;
 
     tryParseGbaSaveType(json[KEY_GAME_SETTINGS_SAVE_TYPE], gameSettings.saveType);
+    readBoolSetting(json[KEY_GAME_SETTINGS_SLOT2_SAVE], gameSettings.slot2Save);
 }
 
 static void readJson(const JsonDocument& json, AppSettings& appSettings)

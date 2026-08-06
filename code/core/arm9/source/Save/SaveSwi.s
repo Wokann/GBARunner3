@@ -23,8 +23,12 @@ arm_func sav_swiHandler
     bl jit_ensureBlockJitted
 #endif
     pop {r0-r3,r12}
-    msr cpsr_c, #0x10
+    // Run the patched driver function in system mode (privileged) so it can
+    // access the GBA slot hardware directly. User mode caused an immediate
+    // hang before the first save read. Switch back to user mode before
+    // returning to the GBA code.
     blx r12
+    msr cpsr_c, #0x10
     pop {lr}
     bx lr
 

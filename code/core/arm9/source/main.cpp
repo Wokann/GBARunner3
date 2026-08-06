@@ -229,6 +229,7 @@ static void disableSramWrites(void)
 static void handleSave(const char* savePath)
 {
     const auto& gameSettings = gAppSettingsService.GetAppSettings().gameSettings;
+    g_useSlot2Save = gameSettings.slot2Save;
     if (gameSettings.saveType == GbaSaveType::None)
     {
         gLogger->Log(LogLevel::Debug, "Save Type: None\n");

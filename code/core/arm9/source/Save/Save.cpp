@@ -15,7 +15,9 @@
 #include <nds/bios.h>
 #include <nds/memory.h>
 #include "Save.h"
+#include "SaveSlot2.h"
 #include <libtwl/mem/memExtern.h>
+#include "mini-printf.h"
 
 #define DEFAULT_SAVE_SIZE   (32 * 1024)
 
@@ -32,9 +34,6 @@ static DWORD sClusterTable[64];
 static u32 sSkipSaveCheckInstruction;
 
 // Slot2 GBA cart save support
-bool g_useSlot2Save = true;
-SaveType g_slot2SaveType = SAVE_TYPE_NONE;
-
 // temporarily
 extern FIL gFile;
 
@@ -158,27 +157,7 @@ void sav_initializeSave(const SaveTypeInfo* saveTypeInfo, const char* savePath)
         }
     }
 
-    if (g_useSlot2Save)
-    {   
-        g_slot2SaveType = saveTypeInfo->type;
-        if(g_slot2SaveType & SAVE_TYPE_SRAM)
-        {
-            mem_setGbaCartridgeCpu(EXMEMCNT_SLOT2_CPU_ARM9);
-            const vu8* slot2Sram = (const vu8*)0x0A000000;
-            for (u32 i = 0; i < saveSize && i < SAVE_DATA_SIZE; i++)
-                gSaveData[i] = slot2Sram[i];
-        }
-        else if(g_slot2SaveType & SAVE_TYPE_FLASH)
-        {
-            g_useSlot2Save = true;
-        }
-        else if(g_slot2SaveType & SAVE_TYPE_EEPROM)
-        {
-            g_useSlot2Save = false;
-        }
-        else
-            g_useSlot2Save = false;
-    }
+    slot2InitializeSave(saveTypeInfo, saveSize);
 
     gGbaSaveShared.saveState = GBA_SAVE_STATE_CLEAN;
     sSkipSaveCheckInstruction = emu_vblankIrqSkipSaveCheckInstruction;
@@ -205,15 +184,7 @@ extern "C" u8 sav_readSaveByteFromFile(u32 saveAddress)
 {
     vm_enableNestedIrqs();
     u8 saveByte;
-    if (g_useSlot2Save)
-    {
-        mem_setGbaCartridgeCpu(EXMEMCNT_SLOT2_CPU_ARM9);
-        slot2FlashReadByte(saveAddress, &saveByte);
-        //f_lseek(&gSaveFile, saveAddress);
-        //UINT bytesWritten = 0;
-        //f_write(&gSaveFile, &saveByte, 1, &bytesWritten);
-    }
-    else if (Environment::IsIsNitroEmulator())
+    if (Environment::IsIsNitroEmulator())
     {
         // save buffer in extended memory
         saveByte = ISNITRO_SAVE_BUFFER[saveAddress];
@@ -232,74 +203,7 @@ extern "C" u8 sav_readSaveByteFromFile(u32 saveAddress)
 extern "C" void sav_writeSaveByteToFile(u32 saveAddress, u8 data)
 {
     vm_enableNestedIrqs();
-    if (g_useSlot2Save)
-    {
-        mem_setGbaCartridgeCpu(EXMEMCNT_SLOT2_CPU_ARM9);
-        u32 addeInSector = saveAddress & 0x0FFF;
-        if(addeInSector == 0) memset(gSaveData, SAVE_DATA_FILL, SAVE_DATA_SIZE);
-        gSaveData[addeInSector] = data;
-        if(addeInSector == 0x0FFF)
-        {
-            u32 sectorAddr = saveAddress & 0x1F000;
-            for (u32 i = 0; i < 0x1000; ++i) slot2FlashReadByte(sectorAddr + i, &gSaveData[0x1000 + i]);
-            bool saveIsChanged = false;
-            for (u32 i = 0; i < 0x1000; ++i)
-            {
-                if(gSaveData[i] != gSaveData[0x1000 + i])
-                {
-                    saveIsChanged = true;
-                    break;
-                }
-            }
-            if(saveIsChanged)
-            {
-                bool isErased = true;
-                for (u32 i = 0; i < 0x1000; ++i)
-                {
-                    if(gSaveData[i] != 0xFF)
-                    {
-                        isErased = false;
-                        break;
-                    }
-                }
-                f_lseek(&gSaveFile, sectorAddr);
-                UINT bytesWritten = 0;
-                f_write(&gSaveFile, &gSaveData, 0x2000, &bytesWritten);
-                f_sync(&gSaveFile);
-
-                if(isErased)
-                    ;//slot2FlashEraseSector(sectorAddr);
-                else
-                {
-                    for (u32 i = 0; i < 0x1000; ++i)
-                    {
-                        slot2FlashProgramByte(sectorAddr + i, gSaveData[i]);
-                    }
-                }
-            }
-        }
-
-
-        /*switch(slot2WriteType)
-        {
-            case SLOT2_WRITE_ERASE_FLASH_CHIP:
-                slot2FlashEraseChip();
-                break;
-            case SLOT2_WRITE_ERASE_FLASH_SECTOR:
-                slot2FlashEraseSector(saveAddress & ~0x0FFF);
-                break;
-            case SLOT2_WRITE_PROGRAM_FLASH_SECTOR:
-            case SLOT2_WRITE_PROGRAM_FLASH_BYTE:*/
-                slot2FlashProgramByte(saveAddress, data);
-                /*break;
-            case SLOT2_WRITE_PROGRAM_EEPROM_UNIT:
-                break;
-            case SLOT2_WRITE_NONE:
-            default:
-                break;
-        }*/
-    }
-    else if (Environment::IsIsNitroEmulator())
+    if (Environment::IsIsNitroEmulator())
     {
         // save buffer in extended memory
         ISNITRO_SAVE_BUFFER[saveAddress] = data;
@@ -330,16 +234,15 @@ extern "C" void sav_writeSaveToFile(void)
     {
         if (g_useSlot2Save)
         {
-            mem_setGbaCartridgeCpu(EXMEMCNT_SLOT2_CPU_ARM9);
-            vu8* slot2Sram = (vu8*)0x0A000000;
-            for (u32 i = 0; i < gGbaSaveShared.saveDataSize; i++)
-                slot2Sram[i] = gSaveData[i];
+            // Slot2 mode: write only to the cartridge, nothing to the SD card.
+            sav_syncSlot2Save();
         }
-        else{
-        f_lseek(&gSaveFile, 0);
-        UINT bytesWritten = 0;
-        f_write(&gSaveFile, gSaveData, gGbaSaveShared.saveDataSize, &bytesWritten);
-        f_sync(&gSaveFile);
+        else
+        {
+            f_lseek(&gSaveFile, 0);
+            UINT bytesWritten = 0;
+            f_write(&gSaveFile, gSaveData, gGbaSaveShared.saveDataSize, &bytesWritten);
+            f_sync(&gSaveFile);
         }
     }
 
@@ -347,57 +250,3 @@ extern "C" void sav_writeSaveToFile(void)
     emu_vblankIrqSkipSaveCheckInstruction = sSkipSaveCheckInstruction;
 }
 
-extern "C" void slot2FlashSetBank(u8 bank)
-{
-    *(vu8*)0x0A005555 = 0xAA;
-    *(vu8*)0x0A002AAA = 0x55;
-    *(vu8*)0x0A005555 = 0xB0;//切换bank
-    *(vu8*)0x0A000000 = bank;
-}
-
-extern "C" void slot2FlashEraseChip(void)
-{
-    *(vu8*)0x0A005555 = 0xAA;
-    *(vu8*)0x0A002AAA = 0x55;
-    *(vu8*)0x0A005555 = 0x80;//擦除
-    *(vu8*)0x0A005555 = 0xAA;
-    *(vu8*)0x0A002AAA = 0x55;
-    *(vu8*)0x0A005555 = 0x10;//整片擦除
-    while (*(vu8*)0x0A000000 != 0xFF) {swiDelay(10);}
-}
-
-extern "C" void slot2FlashEraseSector(u32 sectorAddr)
-{
-    bool needBank1 = sectorAddr >= 0x10000;
-    slot2FlashSetBank(needBank1);
-    u32 bankAddr = sectorAddr & 0xFFFF;
-    vu8* sector = (vu8*)(0x0A000000 + bankAddr);
-    *(vu8*)0x0A005555 = 0xAA;
-    *(vu8*)0x0A002AAA = 0x55;
-    *(vu8*)0x0A005555 = 0x80;//擦除
-    *(vu8*)0x0A005555 = 0xAA;
-    *(vu8*)0x0A002AAA = 0x55;
-    *sector = 0x30;//扇区擦除
-    while (*sector != 0xFF) {swiDelay(10);}
-}
-
-extern "C" void slot2FlashReadByte(u32 saveAddress, u8* buffer)
-{
-    bool needBank1 = saveAddress >= 0x10000;
-    slot2FlashSetBank(needBank1);
-    u32 addrInBank = saveAddress & 0xFFFF;
-    *buffer = *(vu8*)(0x0A000000 + addrInBank);
-}
-
-extern "C" void slot2FlashProgramByte(u32 saveAddress, u8 data)
-{
-    bool needBank1 = (saveAddress >= 0x10000);
-    slot2FlashSetBank(needBank1);
-    u32 addrInBank = saveAddress & 0xFFFF;
-    vu8* ptr = (vu8*)(0x0A000000 + addrInBank);
-    *(vu8*)0x0A005555 = 0xAA;
-    *(vu8*)0x0A002AAA = 0x55;
-    *(vu8*)0x0A005555 = 0xA0;//写入
-    *ptr = data;
-    while (*ptr != data) {swiDelay(10);}
-}

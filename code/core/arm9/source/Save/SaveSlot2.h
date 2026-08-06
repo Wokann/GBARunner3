@@ -29,6 +29,12 @@ u32 slot2FlashEraseSector(u32 sectorAddr);
 void slot2FlashReadByte(u32 saveAddress, u8* buffer);
 u32 slot2FlashProgramByte(u32 saveAddress, u8 data);
 
+// EEPROM serial access on the DS (0x09FFFF00). The protocol is the same as
+// the GBA SDK / GodMode9i, but bits are transferred with plain CPU accesses
+// instead of DMA3 (DMA3 is used by the GBA emulator).
+void slot2EepromRead8Bytes(u8* out, u16 addr, bool shortAddr);
+void slot2EepromWrite8Bytes(const u8* in, u16 addr, bool shortAddr);
+
 // Upper-layer integration points (called from the original save code).
 void slot2InitializeSave(const SaveTypeInfo* saveTypeInfo, u32 saveSize);
 void sav_syncSlot2Save(void);

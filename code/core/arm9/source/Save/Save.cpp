@@ -12,7 +12,12 @@
 #include "SdCache/SdCache.h"
 #include "IpcChannels.h"
 #include "GbaSaveIpcCommand.h"
+#include <nds/bios.h>
+#include <nds/memory.h>
 #include "Save.h"
+#include "SaveSlot2.h"
+#include <libtwl/mem/memExtern.h>
+#include "mini-printf.h"
 
 #define DEFAULT_SAVE_SIZE   (32 * 1024)
 
@@ -28,6 +33,7 @@ gba_save_shared_t gGbaSaveShared;
 static DWORD sClusterTable[64];
 static u32 sSkipSaveCheckInstruction;
 
+// Slot2 GBA cart save support
 // temporarily
 extern FIL gFile;
 
@@ -151,6 +157,8 @@ void sav_initializeSave(const SaveTypeInfo* saveTypeInfo, const char* savePath)
         }
     }
 
+    slot2InitializeSave(saveTypeInfo, saveSize);
+
     gGbaSaveShared.saveState = GBA_SAVE_STATE_CLEAN;
     sSkipSaveCheckInstruction = emu_vblankIrqSkipSaveCheckInstruction;
     if (!saveTypeInfo || (saveTypeInfo->type & SAVE_TYPE_SRAM))
@@ -224,12 +232,21 @@ extern "C" void sav_writeSaveToFile(void)
 {
     if (gGbaSaveShared.saveDataSize != 0 && !Environment::IsIsNitroEmulator())
     {
-        f_lseek(&gSaveFile, 0);
-        UINT bytesWritten = 0;
-        f_write(&gSaveFile, gSaveData, gGbaSaveShared.saveDataSize, &bytesWritten);
-        f_sync(&gSaveFile);
+        if (g_useSlot2Save)
+        {
+            // Slot2 mode: write only to the cartridge, nothing to the SD card.
+            sav_syncSlot2Save();
+        }
+        else
+        {
+            f_lseek(&gSaveFile, 0);
+            UINT bytesWritten = 0;
+            f_write(&gSaveFile, gSaveData, gGbaSaveShared.saveDataSize, &bytesWritten);
+            f_sync(&gSaveFile);
+        }
     }
 
     gGbaSaveShared.saveState = GBA_SAVE_STATE_CLEAN;
     emu_vblankIrqSkipSaveCheckInstruction = sSkipSaveCheckInstruction;
 }
+

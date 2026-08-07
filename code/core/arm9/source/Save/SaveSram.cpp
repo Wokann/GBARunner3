@@ -1,5 +1,6 @@
 #include "common.h"
 #include "Save.h"
+#include "SaveSlot2.h"
 #include "SaveTypeInfo.h"
 #include "SaveSram.h"
 
@@ -14,18 +15,24 @@ static const u32 sVerifySramV111Sig[] = { 0xB0B0B570u, 0x1C0D1C04u, 0x4A081C16u,
 
 static void readSram(const u8* src, u8* dst, u32 size)
 {
+    if (slot2SramRead(src, dst, size))
+        return;
     for (u32 i = 0; i < size; i++)
         *dst++ = *src++;
 }
 
 static void writeSram(const u8* src, u8* dst, u32 size)
 {
+    if (slot2SramWrite(src, dst, size))
+        return;
     for (u32 i = 0; i < size; i++)
         *dst++ = *src++;
 }
 
 static const u8* verifySram(const u8* src, const u8* tgt, u32 size)
 {
+    if (g_useSlot2Save)
+        return slot2SramVerify(src, tgt, size) ? nullptr : tgt + size;
     for (u32 i = 0; i < size; ++i)
     {
         u8 saveByte = *tgt++;

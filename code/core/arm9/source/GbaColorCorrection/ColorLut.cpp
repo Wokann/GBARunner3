@@ -5,7 +5,9 @@
 
 // Based on https://gist.github.com/profi200/bfa7be60b3eecb8c43f59000f626c743
 
-u16 gColorLut[COLOR_LUT_SIZE];
+// 64KB lookup table; keep it in EWRAM - vrama has no room for it (the slot2
+// save support code grew vrama usage past the 128K limit).
+[[gnu::section(".ewram.bss")]] u16 gColorLut[COLOR_LUT_SIZE];
 
 // When the 2d engine converts from 5 to 6 bit, the lsb bit will always be zero (i.e. 31 -> 62)
 static constexpr u32 rgb8ToRgb5(u32 value8)

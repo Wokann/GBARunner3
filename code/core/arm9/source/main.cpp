@@ -28,6 +28,8 @@
 #include "SdCache/SdCache.h"
 #include "JitPatcher/JitCommon.h"
 #include "JitPatcher/JitArm.h"
+#include "MemCopy.h"
+#include "Slot2.h"
 #include "Peripherals/Sound/GbaSound9.h"
 #include "Patches/HarvestMoonPatches.h"
 #include "Patches/BadMixerPatch.h"
@@ -209,6 +211,42 @@ static void loadGbaRom(const char* romPath)
     f_lseek(&gFile, ROM_LINEAR_GBA_ADDRESS - 0x08000000);
     f_read(&gFile, (void*)ROM_LINEAR_DS_ADDRESS, ROM_LINEAR_SIZE, &br);
 
+    if (gExternalPatch.TryLoad(gRomHeader))
+    {
+        gLogger->Log(LogLevel::Debug, "Applying external patches to linear rom...\n");
+        if (!gExternalPatch.ApplyLinearPatches())
+        {
+            gLogger->Log(LogLevel::Fatal, "Failed to apply external patches (%u blocks), refusing to boot\n",
+                gExternalPatch.GetFailedBlockCount());
+            // Fail closed: never run a game with partially applied patches.
+            GFX_PLTT_BG_MAIN[0] = 0x1F << 10;
+            while (true);
+        }
+    }
+    HarvestMoonPatches().TryApplyPatches(gRomHeader.gameCode);
+    if (BadMixerPatch().TryApplyPatch())
+    {
+        gLogger->Log(LogLevel::Debug, "Bad mixer patch applied\n");
+    }
+}
+
+static void loadGbaCart(const char* romPath)
+{
+    // The clicked ROM file is only a launcher placeholder: open it so the FAT
+    // volume context (gFile.obj.fs) is valid, but all ROM reads come from the
+    // slot2 cart.
+    UINT br;
+    memset(&gFile, 0, sizeof(gFile));
+    f_open(&gFile, romPath, FA_OPEN_EXISTING | FA_READ);
+    sdc_init();
+
+    // SLOT2 should be accessible now, so copy the first 2MB to Main Memory.
+    mem_copy32((void*)0x08000000u, (void*)ROM_LINEAR_DS_ADDRESS, ROM_LINEAR_SIZE);
+
+    // The cart ROM is a mask ROM and cannot be patched in place: external
+    // patches are baked into the .pre sidecar (original blocks read from the
+    // cart), and the linear region is patched in memory here.
+    gExternalPatch.SetRomSize(gSlot2RomSize);
     if (gExternalPatch.TryLoad(gRomHeader))
     {
         gLogger->Log(LogLevel::Debug, "Applying external patches to linear rom...\n");
@@ -538,7 +576,19 @@ extern "C" void gbaRunnerMain(int argc, char* argv[])
     relocateGbaBios();
     applyBiosVmPatches();
     const char* romPath = argc > 1 ? argv[1] : DEFAULT_ROM_FILE_PATH;
-    loadGbaRom(romPath);
+
+    // Slot2-cart mode is the primary target: whenever a cart is inserted its
+    // ROM is used (with SD patches applied), regardless of which ROM file was
+    // clicked. SD mode remains as a fallback when no cart is present.
+    if (checkSlot2())
+    {
+        loadGbaCart(romPath);
+    }
+    else
+    {
+        gSlot2Active = false;
+        loadGbaRom(romPath);
+    }
     char* romExtension = strrchr(romPath, '.');
     if (romExtension)
     {

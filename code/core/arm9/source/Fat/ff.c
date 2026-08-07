@@ -438,10 +438,14 @@ typedef struct {
 #if FF_VOLUMES < 1 || FF_VOLUMES > 10
 #error Wrong FF_VOLUMES setting
 #endif
+// In EWRAM BSS: the default .bss (vrama) is full and has no headroom.
+[[gnu::section(".ewram.bss")]]
 static FATFS* FatFs[FF_VOLUMES];	/* Pointer to the filesystem objects (logical drives) */
+[[gnu::section(".ewram.bss")]]
 static WORD Fsid;					/* Filesystem mount ID */
 
 #if FF_FS_RPATH != 0
+[[gnu::section(".ewram.bss")]]
 static /*BYTE*/WORD CurrVol;				/* Current drive */
 #endif
 
@@ -6607,4 +6611,3 @@ FRESULT f_setcp (
 	return FR_OK;
 }
 #endif	/* FF_CODE_PAGE == 0 */
-

@@ -9,6 +9,8 @@
 #include "SdCache.h"
 #include "Patches/ExternalPatch.h"
 #include "JitPatcher/JitCommon.h"
+#include "MemCopy.h"
+#include "Slot2.h"
 
 typedef struct
 {
@@ -16,12 +18,15 @@ typedef struct
     vu32 romBlock;
 } SdcFetch;
 
+// The default .bss (vrama) is full: these small statics live in EWRAM BSS.
+[[gnu::section(".ewram.bss")]]
 static SdcFetch sCurrentFetch;
 
 [[gnu::section(".vramhi.bss")]]
 void* sdc_romBlockToCacheBlock[SDC_ROM_BLOCK_COUNT];
 
 /// @brief Random generator state for random cache replacement.
+[[gnu::section(".ewram.bss")]]
 static u32 sRandomState;
 
 /// @brief Maps sd cache blocks to rom blocks.
@@ -40,10 +45,14 @@ static u8 sCacheBlockUsed[SDC_BLOCK_COUNT];
 
 /// @brief The number of usable blocks in the cache. This can be less than the
 ///        total number of cache blocks when some blocks are permanently loaded.
+[[gnu::section(".ewram.bss")]]
 static u32 sBlockCount;
 
+[[gnu::section(".ewram.bss")]]
 static u32 sTabuLevel;
+[[gnu::section(".ewram.bss")]]
 static u32 sTabuBlocks[2];
+[[gnu::section(".ewram.bss")]]
 vu32 gSdCacheIrqForbiddenRomBlockReplacementRange;
 
 // In EWRAM BSS: the default .bss (vrama) is full and has no headroom.
@@ -52,6 +61,9 @@ static DWORD sClusterTable[512];
 
 // temporarily
 extern FIL gFile;
+
+extern bool gSlot2Active;
+extern u32 gSlot2RomSize;
 
 /// @brief Returns a cache block to replace.
 /// @return The index of the cache block to replace.
@@ -135,7 +147,7 @@ static u32 getSdSectorOfRomBlock(u32 romBlock)
 
 static void fillOutOfBoundsCacheBlock(u32 romBlock, u32 cacheBlock)
 {
-    u32 romSize = f_size(&gFile);
+    u32 romSize = gSlot2Active ? gSlot2RomSize : (u32)f_size(&gFile);
     u32 powerOf2RomSize = romSize < 0x100000 ? 0x100000 : (1 << (32 - __builtin_clz(romSize - 1)));
     if (romBlock * SDC_BLOCK_SIZE < powerOf2RomSize)
     {
@@ -159,13 +171,18 @@ static void fillOutOfBoundsCacheBlock(u32 romBlock, u32 cacheBlock)
 /// @param dst The destination buffer.
 static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
 {
-    u32 sector = getSdSectorOfRomBlock(romBlock);
-    // Patched blocks are served from the pre-patched .pre sidecar: one raw
-    // sector read, no FatFS, no on-demand patch application in the hot path.
+    // Patched blocks are served from the pre-patched .pre sidecar (raw sector
+    // reads from the SD). Everything else comes from the ROM source: the
+    // slot2 cart in cart mode, or the SD ROM file in SD mode.
+    u32 sector = 0;
     u32 bakedSector = externalPatch_getBakedBlockSector(romBlock);
     if (bakedSector != 0)
     {
         sector = bakedSector;
+    }
+    else if (!gSlot2Active)
+    {
+        sector = getSdSectorOfRomBlock(romBlock);
     }
 
     u32 irqs = fs_waitForCompletionOfCurrentTransaction(true);
@@ -235,6 +252,20 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     if (sector != 0)
     {
         irqs = fs_waitForCompletion(&waitToken, true);
+    }
+    else if (gSlot2Active)
+    {
+        // Slot2 cart: copy the block straight from the cart, no SD read.
+        // IRQs stay disabled during the copy so a GBA interrupt cannot
+        // re-enter loadRomBlock while the block is being filled.
+        irqs = arm_disableIrqs();
+        mem_copy32((void*)(0x08000000 + (romBlock * SDC_BLOCK_SIZE)), &sdc_cache[cacheBlock][0], SDC_BLOCK_SIZE);
+        if (romBlock * SDC_BLOCK_SIZE >= gSlot2RomSize)
+        {
+            // Beyond the physical cart size: emulate GBA out-of-bounds reads
+            // instead of keeping the cart's mirrored garbage.
+            fillOutOfBoundsCacheBlock(romBlock, cacheBlock);
+        }
     }
     else
     {
@@ -330,11 +361,16 @@ void sdc_init(void)
     gIrqYieldingEnabled = true;
 
     sClusterTable[0] = sizeof(sClusterTable) / sizeof(DWORD);
-    gFile.cltbl = sClusterTable;
-    u32 result = f_lseek(&gFile, CREATE_LINKMAP);
-    if (result != FR_OK)
+    if (!gSlot2Active)
     {
-        logAddress(0xDEADBEEF);
-        logAddress(result);
+        // In slot2 mode the ROM comes from the cart, so the SD ROM file's
+        // cluster map is not needed.
+        gFile.cltbl = sClusterTable;
+        u32 result = f_lseek(&gFile, CREATE_LINKMAP);
+        if (result != FR_OK)
+        {
+            logAddress(0xDEADBEEF);
+            logAddress(result);
+        }
     }
 }

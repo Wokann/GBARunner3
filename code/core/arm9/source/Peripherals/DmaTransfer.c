@@ -29,20 +29,28 @@ extern s8 dma_stepTable[4];
 extern u32 emu_hblankDmaSkipInstruction;
 extern u32 emu_hblankDmaJumpInstructions[4];
 
+// The default .bss (vrama) is full: these small statics live in EWRAM BSS.
+[[gnu::section(".ewram.bss")]]
 static u32 hblankDmaSkipInstruction;
+[[gnu::section(".ewram.bss")]]
 static u32 hblankDmaSkipDuringVblankInstruction;
+[[gnu::section(".ewram.bss")]]
 static u32 hblankDmaJumpInstructions[4];
 
 extern u32 emu_vblankDmaJumpInstruction;
 extern u32 emu_vblankDmaJumpInstructions[4];
 
+[[gnu::section(".ewram.bss")]]
 static u32 vblankDmaJumpInstruction;
+[[gnu::section(".ewram.bss")]]
 static u32 vblankDmaJumpInstructions[4];
 
 extern u32 emu_soundDma1JumpInstruction;
 extern u32 emu_soundDma2JumpInstruction;
 
+[[gnu::section(".ewram.bss")]]
 static u32 soundDma1JumpInstruction;
+[[gnu::section(".ewram.bss")]]
 static u32 soundDma2JumpInstruction;
 
 static inline void updateHBlankIrqForChannelStop(void)

@@ -7,11 +7,13 @@
 #include "GbaHeader.h"
 #include "MemoryEmulator/RomDefs.h"
 #include "SdCache/SdCache.h"
+#include "MemCopy.h"
 #include "ExternalPatch.h"
 #include "cp15.h"
 
 extern FIL gExternalPatchFile;
 extern FIL gFile; // ROM file (SD mode); slot2 cart mode uses SetRomSize() instead.
+extern bool gSlot2Active;
 
 [[gnu::section(".ewram.bss"), gnu::aligned(4)]]
 static RomBlockIndexEntry sBlockIndex[EXTERNAL_PATCH_MAX_BLOCK_COUNT];
@@ -31,6 +33,8 @@ static u32 sPrepatchFileSize;
 // cache block 0 instead of reserving another 4KB in EWRAM.
 #define BAKE_BUF (&sdc_cache[0][0])
 
+// In EWRAM BSS: the default .bss (vrama) is full and has no headroom.
+[[gnu::section(".ewram.bss")]]
 ExternalPatch gExternalPatch;
 
 #define GAME_PATCH_FILE_PATH_FORMAT     "/_gba/titles/%c%c%c%c%02X.patch"
@@ -183,6 +187,13 @@ bool ExternalPatch::ReadRomBlock(u32 romBlock, u8* dst)
     {
         // Block beyond the ROM/cart size: 0xFF base, same as ApplyRomBlockPatches.
         memset(dst, 0xFF, SDC_BLOCK_SIZE);
+        return true;
+    }
+
+    if (gSlot2Active)
+    {
+        // Slot2 cart: the original block is read straight from the cart.
+        mem_copy32((void*)(0x08000000 + (u32)romBlock * SDC_BLOCK_SIZE), dst, SDC_BLOCK_SIZE);
         return true;
     }
 
@@ -635,7 +646,9 @@ bool ExternalPatch::ApplyRomBlockPatches(u32 romBlock, void* cacheBlock)
     }
 
     const RomBlockIndexEntry& entry = sBlockIndex[index];
-    u32 romFileSize = f_size(&gFile);
+    // Slot2 cart mode: the cart size (set via SetRomSize) is the boundary,
+    // not the placeholder ROM file's size.
+    u32 romFileSize = mRomSize != 0 ? mRomSize : (u32)f_size(&gFile);
     if ((u64)romBlock * SDC_BLOCK_SIZE >= romFileSize)
     {
         memset(cacheBlock, 0xFF, SDC_BLOCK_SIZE);

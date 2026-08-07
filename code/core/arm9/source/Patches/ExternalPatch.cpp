@@ -2,6 +2,8 @@
 #include <string.h>
 #include "mini-printf.h"
 #include "Fat/ff.h"
+#include "Fat/FsIpc.h"
+#include "Fat/diskio.h"
 #include "GbaHeader.h"
 #include "MemoryEmulator/RomDefs.h"
 #include "SdCache/SdCache.h"
@@ -9,14 +11,73 @@
 #include "cp15.h"
 
 extern FIL gExternalPatchFile;
-extern FIL gFile; // ROM file (SD mode). For slot2 this must be replaced by the cart size.
+extern FIL gFile; // ROM file (SD mode); slot2 cart mode uses SetRomSize() instead.
 
 [[gnu::section(".ewram.bss"), gnu::aligned(4)]]
 static RomBlockIndexEntry sBlockIndex[EXTERNAL_PATCH_MAX_BLOCK_COUNT];
 
+[[gnu::section(".ewram.bss"), gnu::aligned(32)]]
+static FIL gPrepatchFile;
+
+[[gnu::section(".ewram.bss"), gnu::aligned(32)]]
+static DWORD sPrepatchClusterTable[256];
+
+[[gnu::section(".ewram.bss")]]
+static bool sPrepatchTableValid;
+[[gnu::section(".ewram.bss")]]
+static u32 sPrepatchFileSize;
+
+// Bake scratch: the SD cache is unused during boot-time baking, so reuse
+// cache block 0 instead of reserving another 4KB in EWRAM.
+#define BAKE_BUF (&sdc_cache[0][0])
+
 ExternalPatch gExternalPatch;
 
-#define GAME_PATCH_FILE_PATH_FORMAT "/_gba/titles/%c%c%c%c%02X.patch"
+#define GAME_PATCH_FILE_PATH_FORMAT     "/_gba/titles/%c%c%c%c%02X.patch"
+#define GAME_PREPATCH_DIR_PATH          "/_gba/prepatch"
+#define GAME_PREPATCH_FILE_PATH_FORMAT "/_gba/prepatch/%c%c%c%c%02X.pre"
+
+[[gnu::section(".ewram")]]
+static u32 crc32Update(u32 crc, const u8* data, u32 len)
+{
+    for (u32 i = 0; i < len; i++)
+    {
+        crc ^= data[i];
+        for (int k = 0; k < 8; k++)
+            crc = (crc & 1) ? (0xEDB88320u ^ (crc >> 1)) : (crc >> 1);
+    }
+    return crc;
+}
+
+[[gnu::section(".ewram")]]
+static u32 computePatchFileHash()
+{
+    if (f_lseek(&gExternalPatchFile, 0) != FR_OK)
+        return 0;
+
+    u32 crc = 0xFFFFFFFF;
+    while (true)
+    {
+        UINT br;
+        if (f_read(&gExternalPatchFile, BAKE_BUF, SDC_BLOCK_SIZE, &br) != FR_OK)
+            return 0;
+        if (br == 0)
+            break;
+        crc = crc32Update(crc, BAKE_BUF, br);
+    }
+    return crc ^ 0xFFFFFFFF;
+}
+
+[[gnu::section(".ewram")]]
+static void getPrepatchPath(char* out, u32 size, u32 gameCode, u8 version)
+{
+    mini_snprintf(out, size, GAME_PREPATCH_FILE_PATH_FORMAT,
+        gameCode & 0xFF,
+        (gameCode >> 8) & 0xFF,
+        (gameCode >> 16) & 0xFF,
+        gameCode >> 24,
+        version);
+}
 
 [[gnu::section(".ewram")]]
 bool ExternalPatch::LoadBlockIndex()
@@ -108,12 +169,245 @@ bool ExternalPatch::LoadBlockIndex()
 }
 
 [[gnu::section(".ewram")]]
+bool ExternalPatch::ReadRomBlock(u32 romBlock, u8* dst)
+{
+    // SD mode: read from the open ROM file. For slot2 cart mode this must be
+    // replaced by a mem_copy32 from 0x08000000 + romBlock * SDC_BLOCK_SIZE
+    // (see the cache-hicode/slot2patch branch).
+    if (mRomSize == 0)
+    {
+        mRomSize = (u32)f_size(&gFile);
+    }
+
+    if ((u64)romBlock * SDC_BLOCK_SIZE >= mRomSize)
+    {
+        // Block beyond the ROM/cart size: 0xFF base, same as ApplyRomBlockPatches.
+        memset(dst, 0xFF, SDC_BLOCK_SIZE);
+        return true;
+    }
+
+    UINT br;
+    if (f_lseek(&gFile, (FSIZE_t)romBlock * SDC_BLOCK_SIZE) != FR_OK)
+        return false;
+    if (f_read(&gFile, dst, SDC_BLOCK_SIZE, &br) != FR_OK || br != SDC_BLOCK_SIZE)
+        return false;
+    return true;
+}
+
+[[gnu::section(".ewram")]]
+bool ExternalPatch::TryLoadPrepatch(u32 patchHash)
+{
+    if (mIndexCount == 0)
+        return false;
+
+    char prePath[64];
+    getPrepatchPath(prePath, sizeof(prePath), mHeader.gamecode, mHeader.version);
+
+    if (f_open(&gPrepatchFile, prePath, FA_READ | FA_OPEN_EXISTING) != FR_OK)
+        return false;
+
+    auto reject = [&]() -> bool {
+        f_close(&gPrepatchFile);
+        return false;
+    };
+
+    UINT br;
+    PrepatchHeader header;
+    if (f_read(&gPrepatchFile, &header, sizeof(header), &br) != FR_OK || br != sizeof(header))
+        return reject();
+    if (header.valid != 1 || header.formatVersion != PREPATCH_FORMAT_VERSION)
+        return reject();
+    if (header.patchHash != patchHash)
+        return reject();
+    if (header.patchedBlockCount != mIndexCount)
+        return reject();
+
+    u32 romSize = mRomSize != 0 ? mRomSize : (u32)f_size(&gFile);
+    if (header.romSize != romSize)
+        return reject();
+
+    u32 clusterSize = gFile.obj.fs->csize * 512;
+    u32 indexBytes = mIndexCount * sizeof(PrepatchBlockEntry);
+    u32 dataBase = (sizeof(PrepatchHeader) + indexBytes + clusterSize - 1) & ~(clusterSize - 1);
+    FSIZE_t expectedSize = (FSIZE_t)dataBase + (FSIZE_t)mIndexCount * SDC_BLOCK_SIZE;
+    if (f_size(&gPrepatchFile) != expectedSize)
+        return reject();
+
+    // Entries must match the in-memory index exactly (order, ids, offsets).
+    for (u32 i = 0; i < mIndexCount; i++)
+    {
+        PrepatchBlockEntry entry;
+        if (f_read(&gPrepatchFile, &entry, sizeof(entry), &br) != FR_OK || br != sizeof(entry))
+            return reject();
+        if (entry.blockIndex != sBlockIndex[i].block_index
+            || entry.dataOffset != dataBase + i * SDC_BLOCK_SIZE)
+            return reject();
+    }
+
+    // Build the cluster map for runtime raw-sector reads (no FatFS in the
+    // hot path). The file handle stays open so obj.fs/cltbl remain valid.
+    sPrepatchClusterTable[0] = sizeof(sPrepatchClusterTable) / sizeof(DWORD);
+    gPrepatchFile.cltbl = sPrepatchClusterTable;
+    if (f_lseek(&gPrepatchFile, CREATE_LINKMAP) != FR_OK)
+        return reject();
+
+    sPrepatchFileSize = (u32)f_size(&gPrepatchFile);
+    sPrepatchTableValid = true;
+    gLogger->Log(LogLevel::Debug, "External patch: prepatch cache valid (%u blocks)\n", mIndexCount);
+    return true;
+}
+
+[[gnu::section(".ewram")]]
+bool ExternalPatch::BakePrepatch(u32 patchHash)
+{
+    // TryLoad guarantees the patch is loaded before calling this. The
+    // mLoaded flag is intentionally NOT checked: a corrupted flag must not
+    // hide the real bake failure behind a silent early return.
+    if (mIndexCount == 0)
+    {
+        return true;
+    }
+
+    char prePath[64];
+    getPrepatchPath(prePath, sizeof(prePath), mHeader.gamecode, mHeader.version);
+
+    FRESULT openRes = f_open(&gPrepatchFile, prePath, FA_READ | FA_WRITE | FA_CREATE_ALWAYS);
+    if (openRes != FR_OK)
+    {
+        gLogger->Log(LogLevel::Error, "External patch: cannot create %s (res=%d)\n", prePath, (int)openRes);
+        return false;
+    }
+
+    auto abortBake = [&](u32 step) -> bool {
+        gLogger->Log(LogLevel::Error, "External patch: bake aborted at step %u\n", step);
+        f_sync(&gPrepatchFile);
+        f_close(&gPrepatchFile);
+        f_unlink(prePath);
+        sPrepatchTableValid = false;
+        return false;
+    };
+
+    u32 clusterSize = gFile.obj.fs->csize * 512;
+    u32 indexBytes = mIndexCount * sizeof(PrepatchBlockEntry);
+    u32 dataBase = (sizeof(PrepatchHeader) + indexBytes + clusterSize - 1) & ~(clusterSize - 1);
+
+    PrepatchHeader header;
+    memset(&header, 0, sizeof(header));
+    header.valid = 0; // placeholder; promoted to 1 only after everything is written
+    header.formatVersion = PREPATCH_FORMAT_VERSION;
+    header.patchHash = patchHash;
+    header.patchedBlockCount = mIndexCount;
+    header.romSize = mRomSize != 0 ? mRomSize : (u32)f_size(&gFile);
+
+    UINT bw;
+    if (f_write(&gPrepatchFile, &header, sizeof(header), &bw) != FR_OK || bw != sizeof(header))
+        return abortBake(1);
+
+    // Index entries, then padding up to the 512/cluster-aligned data base.
+    u32 pos = sizeof(PrepatchHeader);
+    for (u32 i = 0; i < mIndexCount; i++)
+    {
+        PrepatchBlockEntry entry;
+        entry.blockIndex = sBlockIndex[i].block_index;
+        entry.reserved = 0;
+        entry.dataOffset = dataBase + i * SDC_BLOCK_SIZE;
+        if (f_write(&gPrepatchFile, &entry, sizeof(entry), &bw) != FR_OK || bw != sizeof(entry))
+            return abortBake(2);
+        pos += sizeof(entry);
+    }
+    if (pos < dataBase)
+    {
+        memset(BAKE_BUF, 0, SDC_BLOCK_SIZE);
+        u32 pad = dataBase - pos;
+        while (pad > 0)
+        {
+            u32 chunk = pad > SDC_BLOCK_SIZE ? SDC_BLOCK_SIZE : pad;
+            if (f_write(&gPrepatchFile, BAKE_BUF, chunk, &bw) != FR_OK || bw != chunk)
+                return abortBake(3);
+            pad -= chunk;
+        }
+    }
+
+    // Bake every patched block: original block + IPS records -> 4KB result.
+    u32 expectedFirstDword = 0;
+    for (u32 i = 0; i < mIndexCount; i++)
+    {
+        const RomBlockIndexEntry& entry = sBlockIndex[i];
+        if (!ReadRomBlock(entry.block_index, BAKE_BUF))
+        {
+            gLogger->Log(LogLevel::Error, "External patch: bake read failed for block %u\n", entry.block_index);
+            return abortBake(4);
+        }
+        if (!ApplyIPSPatches(entry.block_patch_address, entry.block_patch_size, BAKE_BUF))
+        {
+            gLogger->Log(LogLevel::Error, "External patch: bake apply failed for block %u\n", entry.block_index);
+            return abortBake(5);
+        }
+        if (i == 0)
+        {
+            // Capture the FIRST baked block's head for the readback check;
+            // BAKE_BUF is reused and will hold the last block afterwards.
+            expectedFirstDword = *(u32*)BAKE_BUF;
+        }
+        if (f_write(&gPrepatchFile, BAKE_BUF, SDC_BLOCK_SIZE, &bw) != FR_OK || bw != SDC_BLOCK_SIZE)
+            return abortBake(6);
+    }
+
+    // Commit: promote the placeholder to a valid cache.
+    header.valid = 1;
+    if (f_lseek(&gPrepatchFile, 0) != FR_OK)
+        return abortBake(7);
+    if (f_write(&gPrepatchFile, &header, sizeof(header), &bw) != FR_OK || bw != sizeof(header))
+        return abortBake(8);
+
+    // Build the cluster map for runtime raw-sector reads.
+    sPrepatchClusterTable[0] = sizeof(sPrepatchClusterTable) / sizeof(DWORD);
+    gPrepatchFile.cltbl = sPrepatchClusterTable;
+    if (f_lseek(&gPrepatchFile, CREATE_LINKMAP) != FR_OK)
+        return abortBake(9);
+    if (f_sync(&gPrepatchFile) != FR_OK)
+        return abortBake(10);
+
+    sPrepatchFileSize = (u32)f_size(&gPrepatchFile);
+    sPrepatchTableValid = true;
+
+    gLogger->Log(LogLevel::Debug,
+        "External patch: baked %u blocks (clusterSize=%u) to %s\n",
+        mIndexCount, clusterSize, prePath);
+
+    // Self-check: read the first baked block back through the exact raw-sector
+    // path used at runtime. Catches cluster-map/geometry mistakes at boot
+    // instead of white-screening in-game.
+    u32 checkSector = externalPatch_getBakedBlockSector(sBlockIndex[0].block_index);
+    if (checkSector == 0)
+    {
+        gLogger->Log(LogLevel::Error, "External patch: readback sector lookup failed\n");
+        return abortBake(11);
+    }
+    fs_readSectors(gFile.obj.fs->pdrv == DEV_FAT ? FS_DEVICE_DLDI : FS_DEVICE_DSI_SD,
+                   BAKE_BUF, checkSector, SDC_BLOCK_SIZE / 512);
+    if (memcmp(BAKE_BUF, &expectedFirstDword, 4) != 0)
+    {
+        gLogger->Log(LogLevel::Error,
+            "External patch: readback mismatch (expected 0x%08X, got 0x%08X)\n",
+            expectedFirstDword, *(u32*)BAKE_BUF);
+        return abortBake(12);
+    }
+    return true;
+}
+
+[[gnu::section(".ewram")]]
 bool ExternalPatch::TryLoad(const GbaHeader& header)
 {
     if (mLoaded)
     {
         f_close(&gExternalPatchFile);
         mLoaded = false;
+    }
+    if (sPrepatchTableValid)
+    {
+        f_close(&gPrepatchFile);
+        sPrepatchTableValid = false;
     }
     mIndexCount = 0;
     mFailedBlockCount = 0;
@@ -172,17 +466,43 @@ bool ExternalPatch::TryLoad(const GbaHeader& header)
 
     mLoaded = true;
     gLogger->Log(LogLevel::Debug, "External patch loaded: %u blocks\n", mIndexCount);
+
+    // Pre-patched cache: reuse a valid .pre, or bake a new one. The patch
+    // hash recorded inside detects any change of the .patch file.
+    if (mIndexCount == 0)
+    {
+        return true;
+    }
+
+    u32 patchHash = computePatchFileHash();
+    if (patchHash == 0)
+    {
+        gLogger->Log(LogLevel::Error, "External patch: failed to hash patch file\n");
+        f_close(&gExternalPatchFile);
+        mLoaded = false;
+        return false;
+    }
+
+    f_mkdir(GAME_PREPATCH_DIR_PATH); // ok if it already exists
+
+    if (TryLoadPrepatch(patchHash))
+    {
+        return true;
+    }
+
+    if (!BakePrepatch(patchHash))
+    {
+        // The .pre cache is an optimization, not a requirement: fall back to
+        // on-demand patching (linear at boot + per-cache-block at runtime).
+        gLogger->Log(LogLevel::Warning, "External patch: bake failed, falling back to on-demand patching\n");
+        return true;
+    }
     return true;
 }
 
 [[gnu::section(".ewram")]]
 bool ExternalPatch::ApplyIPSPatches(u32 patchOffset, u32 patchSize, u8* targetBuf)
 {
-    if (!mLoaded)
-    {
-        return false;
-    }
-
     UINT br;
     if (f_lseek(&gExternalPatchFile, patchOffset + 5) != FR_OK)
     {
@@ -265,11 +585,9 @@ bool ExternalPatch::ApplyIPSPatches(u32 patchOffset, u32 patchSize, u8* targetBu
 [[gnu::section(".ewram")]]
 bool ExternalPatch::ApplyLinearPatches()
 {
-    if (!mLoaded)
-    {
-        return false;
-    }
-
+    // No mLoaded check here on purpose: TryLoad() already guarantees the
+    // patch is loaded, and a corrupted flag must not silently disable the
+    // linear patching (see BakePrepatch for the same decision).
     mFailedBlockCount = 0;
     u32 romFileSize = f_size(&gFile);
     bool allOk = true;
@@ -305,7 +623,7 @@ bool ExternalPatch::ApplyLinearPatches()
 [[gnu::section(".ewram")]]
 bool ExternalPatch::ApplyRomBlockPatches(u32 romBlock, void* cacheBlock)
 {
-    if (!mLoaded || mIndexCount == 0)
+    if (mIndexCount == 0)
     {
         return false;
     }
@@ -327,7 +645,7 @@ bool ExternalPatch::ApplyRomBlockPatches(u32 romBlock, void* cacheBlock)
 
 int ExternalPatch::FindBlockIndex(u32 romBlock) const
 {
-    if (!mLoaded || mIndexCount == 0)
+    if (mIndexCount == 0)
     {
         return -1;
     }
@@ -373,4 +691,40 @@ extern "C" [[gnu::section(".ewram")]] void externalPatch_applyRomBlock(u32 romBl
 extern "C" [[gnu::section(".ewram")]] bool externalPatch_isBlockPatched(u32 romBlock)
 {
     return gExternalPatch.IsBlockPatched(romBlock);
+}
+
+extern "C" [[gnu::section(".ewram")]] u32 externalPatch_getBakedBlockSector(u32 romBlock)
+{
+    if (!sPrepatchTableValid)
+        return 0;
+
+    int index = gExternalPatch.FindBlockIndex(romBlock);
+    if (index < 0)
+        return 0;
+
+    u32 clusterSize = gPrepatchFile.obj.fs->csize * 512;
+    u32 indexBytes = gExternalPatch.GetBlockCount() * sizeof(PrepatchBlockEntry);
+    u32 dataBase = (sizeof(PrepatchHeader) + indexBytes + clusterSize - 1) & ~(clusterSize - 1);
+    u32 dataOffset = dataBase + (u32)index * SDC_BLOCK_SIZE;
+    if (dataOffset >= sPrepatchFileSize)
+        return 0;
+
+    FATFS* fs = gPrepatchFile.obj.fs;
+    u32* tbl = gPrepatchFile.cltbl + 1;
+    u32* tableEnd = gPrepatchFile.cltbl + sPrepatchClusterTable[0];
+    u32 csect = (UINT)(dataOffset / 512 & (fs->csize - 1));
+    u32 cshift = __builtin_ctz(fs->csize) + 9;
+    u32 cl = (DWORD)(dataOffset >> cshift);
+    while (true)
+    {
+        if (tbl + 2 > tableEnd)
+            return 0; // walked off the cluster map: never serve a garbage sector
+        u32 ncl = *tbl++;
+        if (cl < ncl)
+            break;
+        cl -= ncl;
+        tbl++;
+    }
+    u32 cluster = cl + *tbl - 2;
+    return fs->database + fs->csize * cluster + csect;
 }

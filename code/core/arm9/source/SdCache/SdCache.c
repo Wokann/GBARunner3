@@ -25,6 +25,8 @@ void* sdc_romBlockToCacheBlock[SDC_ROM_BLOCK_COUNT];
 static u32 sRandomState;
 
 /// @brief Maps sd cache blocks to rom blocks.
+// In EWRAM BSS: the default .bss (vrama) is full and has no headroom.
+[[gnu::section(".ewram.bss")]]
 static u16 sCacheBlockToRomBlock[SDC_BLOCK_COUNT];
 
 /// @brief Second-chance (clock) use bit per cache block. A block whose bit is
@@ -32,6 +34,8 @@ static u16 sCacheBlockToRomBlock[SDC_BLOCK_COUNT];
 ///        replacement (the bit is cleared). This keeps hot blocks resident
 ///        while letting streamed data (e.g. large patched fonts) age out
 ///        naturally instead of occupying the whole cache forever.
+// In EWRAM BSS: the default .bss (vrama) has no headroom left.
+[[gnu::section(".ewram.bss")]]
 static u8 sCacheBlockUsed[SDC_BLOCK_COUNT];
 
 /// @brief The number of usable blocks in the cache. This can be less than the
@@ -46,7 +50,6 @@ static DWORD sClusterTable[512];
 
 // temporarily
 extern FIL gFile;
-extern FIL gExternalPatchFile;
 
 /// @brief Returns a cache block to replace.
 /// @return The index of the cache block to replace.
@@ -146,8 +149,6 @@ static void fillOutOfBoundsCacheBlock(u32 romBlock, u32 cacheBlock)
         }
     }
 
-    sCacheBlockToRomBlock[cacheBlock] = romBlock;
-    sdc_romBlockToCacheBlock[romBlock] = &sdc_cache[cacheBlock][0];
     dc_drainWriteBuffer();
 }
 
@@ -157,6 +158,13 @@ static void fillOutOfBoundsCacheBlock(u32 romBlock, u32 cacheBlock)
 static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
 {
     u32 sector = getSdSectorOfRomBlock(romBlock);
+    // Patched blocks are served from the pre-patched .pre sidecar: one raw
+    // sector read, no FatFS, no on-demand patch application in the hot path.
+    u32 bakedSector = externalPatch_getBakedBlockSector(romBlock);
+    if (bakedSector != 0)
+    {
+        sector = bakedSector;
+    }
 
     u32 irqs = fs_waitForCompletionOfCurrentTransaction(true);
     if (isCurrentlyFetching())
@@ -232,10 +240,12 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
         irqs = arm_disableIrqs();
     }
 
-    // Apply external patches with irqs disabled to avoid re-entering FatFs
-    // from interrupt context. The block is not published to
-    // sdc_romBlockToCacheBlock yet, so no one can observe half-patched data.
-    externalPatch_applyRomBlock(romBlock, &sdc_cache[cacheBlock][0]);
+    if (bakedSector == 0)
+    {
+        // No pre-patched cache: fall back to on-demand patching. IRQs stay
+        // disabled to avoid re-entering FatFs from interrupt context.
+        externalPatch_applyRomBlock(romBlock, &sdc_cache[cacheBlock][0]);
+    }
     sCacheBlockUsed[cacheBlock] = 1;
 
     // The block content has changed (rom data and/or external patches).
@@ -245,6 +255,13 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     if (sector != 0 && sCurrentFetch.romBlock == romBlock)
     {
         finishFetch();
+    }
+    else if (sector == 0)
+    {
+        // Publish only after patching so no one observes half-patched content.
+        sCacheBlockToRomBlock[cacheBlock] = romBlock;
+        sdc_romBlockToCacheBlock[romBlock] = &sdc_cache[cacheBlock][0];
+        dc_drainWriteBuffer();
     }
 
     arm_restoreIrqs(irqs);

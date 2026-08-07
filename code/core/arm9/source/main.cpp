@@ -20,6 +20,7 @@
 #include "Peripherals/DmaTransfer.h"
 #include "Logger/NitroEmulatorOutputStream.h"
 #include "Logger/PlainLogger.h"
+#include "Logger/FileLogger.h"
 #include "Logger/NullLogger.h"
 #include "Save/SaveTagScanner.h"
 #include "Save/Save.h"
@@ -80,6 +81,10 @@ static NitroEmulatorOutputStream sIsNitroOutput;
 [[gnu::section(".ewram.bss")]]
 static PlainLogger sPlainLogger { LogLevel::All, &sIsNitroOutput };
 static NullLogger sNullLogger;
+[[gnu::section(".ewram.bss"), gnu::aligned(32)]]
+static FIL sLogFile;
+[[gnu::section(".ewram.bss")]]
+static FileLogger sFileLogger(&sLogFile);
 ILogger* gLogger;
 static SplashScreen* sSplashScreen;
 
@@ -492,6 +497,19 @@ extern "C" void gbaRunnerMain(int argc, char* argv[])
     {
         GFX_PLTT_BG_MAIN[0] = 0x1F << 10;
         while (1);
+    }
+
+    // Real-hardware boot log: always write to /_gba/gbarunner3.log (truncated
+    // each boot) so patch/bake problems can be diagnosed on the device. The
+    // isNitro emulator has its own debug output and is skipped here.
+    if (gLogger == &sNullLogger)
+    {
+        f_mkdir("/_gba"); // ok if it already exists
+        if (sFileLogger.Open("/_gba/gbarunner3.log"))
+        {
+            gLogger = &sFileLogger;
+            gLogger->Log(LogLevel::Debug, "=== GBARunner3 boot log ===\n");
+        }
     }
 
     // if (Environment::SupportsAgbSemihosting())

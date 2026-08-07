@@ -4,6 +4,7 @@
 #include "Save.h"
 #include "Core/Environment.h"
 #include "GbaHeader.h"
+#include "MemCopy.h"
 #include <libtwl/mem/memExtern.h>
 #include "VirtualMachine/VMNestedIrq.h"
 #include "cp15.h"
@@ -24,18 +25,40 @@ bool slot2CartridgeGameCodeMatches(void)
     if (Environment::IsIsNitroEmulator())
         return false;
 
+    // Save the current EXMEMCNT so the bus timing can be restored after the
+    // probe read; the rest of the emulator may rely on the previous setup.
+    u16 savedExmemcnt = REG_EXMEMCNT;
+    // Configure the full slot2 bus timing like the existing save code and
+    // Environment::Initialize do; reading the ROM header with the reset wait
+    // states can return wrong data on real hardware.
+    mem_setGbaCartridgeRamWait(EXMEMCNT_SLOT2_RAM_WAIT_10);
+    mem_setGbaCartridgeRomWaits(EXMEMCNT_SLOT2_ROM_WAIT1_10, EXMEMCNT_SLOT2_ROM_WAIT2_6);
+    mem_setGbaCartridgePhi(EXMEMCNT_SLOT2_PHI_LOW);
     mem_setGbaCartridgeCpu(EXMEMCNT_SLOT2_CPU_ARM9);
-    // GBA cartridge ROM header game code at 0x080000AC (4 bytes, little-endian).
-    // Byte reads to avoid unaligned access; a missing cartridge reads garbage
-    // which will simply not match and falls back to the SD card save path.
-    const u8* cartCode = (const u8*)0x080000AC;
-    u32 cartGameCode = cartCode[0] | (cartCode[1] << 8) |
-                       (cartCode[2] << 16) | ((u32)cartCode[3] << 24);
+    // Read the whole header with 32-bit copies like slot2rw's checkSlot2:
+    // the cart bus is 16-bit, so byte loads (LDRB) can return 0. Keep it in a
+    // local buffer so gRomHeader (the SD ROM header) is not overwritten.
+    // Game code sits at header offset 0xAC (4 bytes, little-endian).
+    GbaHeader cartHeader;
+    mem_copy32((const void*)0x08000000u, &cartHeader, sizeof(GbaHeader));
+    u32 cartGameCode = cartHeader.gameCode;
+
+    // Restore the previous bus configuration.
+    REG_EXMEMCNT = savedExmemcnt;
+
+    slot2Log("slot2 cart code", cartGameCode, gRomHeader.gameCode);
     // No cartridge (or no slot2 bus device) reads back all 0xFF / 0x00.
     // Treat that as "no cartridge" so save handling falls back to SD.
     if (cartGameCode == 0xFFFFFFFF || cartGameCode == 0)
+    {
+        slot2Log("slot2 no cart", 0, 0);
+        slot2LogFlush();
         return false;
-    return cartGameCode == gRomHeader.gameCode;
+    }
+    bool match = cartGameCode == gRomHeader.gameCode;
+    slot2Log("slot2 match", match ? 1 : 0, 0);
+    slot2LogFlush();
+    return match;
 }
 
 void slot2InitializeSave(const SaveTypeInfo* saveTypeInfo, u32 saveSize)

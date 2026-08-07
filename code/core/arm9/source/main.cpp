@@ -232,6 +232,8 @@ static void handleSave(const char* savePath)
     const auto& gameSettings = gAppSettingsService.GetAppSettings().gameSettings;
     g_useSlot2Save = gameSettings.slot2Save;
     gLogger->Log(LogLevel::Debug, "Slot2 save mode: %s\n", g_useSlot2Save ? "slot2" : "sd");
+    slot2Log("useSlot2Save", g_useSlot2Save ? 1 : 0, 0);
+    slot2LogFlush();
     if (g_useSlot2Save && !slot2CartridgeGameCodeMatches())
     {
         gLogger->Log(LogLevel::Debug, "Slot2 save disabled: cartridge game code mismatch\n");

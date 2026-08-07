@@ -23,12 +23,26 @@ arm_func sav_swiHandler
     bl jit_ensureBlockJitted
 #endif
     pop {r0-r3,r12}
-    // Run the patched driver function in system mode (privileged) so it can
-    // access the GBA slot hardware directly. User mode caused an immediate
-    // hang before the first save read. Switch back to user mode before
-    // returning to the GBA code.
+    // Only the slot2 path needs the patched driver to run in system mode
+    // (privileged) so it can access the GBA slot hardware directly; user mode
+    // caused an immediate hang before the first save read there.
+    // In SD card mode the driver must keep running in user mode like the
+    // original code: system mode uses the SVC stack at 0x03008000, which grows
+    // down into the emulated GBA IWRAM and corrupts it on deep FatFs calls.
+    push {r11}
+    ldr r11,= g_useSlot2Save
+    ldrb r11, [r11]
+    cmp r11, #0
+    beq 1f
+    pop {r11}
     blx r12
     msr cpsr_c, #0x10
+    pop {lr}
+    bx lr
+1:
+    pop {r11}
+    msr cpsr_c, #0x10
+    blx r12
     pop {lr}
     bx lr
 

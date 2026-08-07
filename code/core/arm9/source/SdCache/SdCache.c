@@ -46,6 +46,8 @@ static u32 sTabuLevel;
 static u32 sTabuBlocks[2];
 vu32 gSdCacheIrqForbiddenRomBlockReplacementRange;
 
+// In EWRAM BSS: the default .bss (vrama) is full and has no headroom.
+[[gnu::section(".ewram.bss"), gnu::aligned(32)]]
 static DWORD sClusterTable[512];
 
 // temporarily

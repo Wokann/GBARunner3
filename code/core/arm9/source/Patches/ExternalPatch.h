@@ -4,7 +4,9 @@
 #include "Fat/ff.h"
 #include "GbaHeader.h"
 
-#define EXTERNAL_PATCH_MAX_BLOCK_COUNT 8192
+// 4096 blocks = 16MB of patched ROM, far beyond any realistic patch. The
+// in-memory index is 8 bytes per block, so this keeps EWRAM usage at 32KB.
+#define EXTERNAL_PATCH_MAX_BLOCK_COUNT 4096
 
 #pragma pack(push, 1)
 struct PatchFileHeader

@@ -23,6 +23,7 @@
 #include "Logger/NullLogger.h"
 #include "Save/SaveTagScanner.h"
 #include "Save/Save.h"
+#include "Save/SaveSlot2.h"
 #include "SdCache/SdCache.h"
 #include "JitPatcher/JitCommon.h"
 #include "JitPatcher/JitArm.h"
@@ -230,6 +231,12 @@ static void handleSave(const char* savePath)
 {
     const auto& gameSettings = gAppSettingsService.GetAppSettings().gameSettings;
     g_useSlot2Save = gameSettings.slot2Save;
+    gLogger->Log(LogLevel::Debug, "Slot2 save mode: %s\n", g_useSlot2Save ? "slot2" : "sd");
+    if (g_useSlot2Save && !slot2CartridgeGameCodeMatches())
+    {
+        gLogger->Log(LogLevel::Debug, "Slot2 save disabled: cartridge game code mismatch\n");
+        g_useSlot2Save = false;
+    }
     if (gameSettings.saveType == GbaSaveType::None)
     {
         gLogger->Log(LogLevel::Debug, "Save Type: None\n");

@@ -36,6 +36,8 @@ struct flash_patchinfo_t
 
 static flash_patchinfo_t sPatchInfo;
 static flash_v120_type sFlashType;
+[[gnu::section(".ewram.bss")]]
+static u32 sLastFlashSector = 0xFFFFFFFF;
 static const u16 sMaxTime[] = { 0xA, 0xFFBD, 0xC2, 0xA, 0xFFBD, 0xC2, 0x28, 0xFFBD, 0xC2, 0xC8, 0xFFBD, 0xC2 };
 
 static void readFlash(u16 secNo, u32 offset, u8* dst, u32 size)
@@ -66,7 +68,7 @@ static u32 verifyFlashSector(u16 secNo, const u8* src)
             slot2FlashReadByte(saveAddress++, &saveByte);
             u8 expectedByte = *src++;
             if (saveByte != expectedByte)
-                return 0x0E000000 + ((secNo & 0xF) << 12) + i;
+                return 0x0E000000 + (secNo << 12) + i;
         }
         return 0;
     }
@@ -75,7 +77,7 @@ static u32 verifyFlashSector(u16 secNo, const u8* src)
         u8 saveByte = sav_readSaveByteFromFileFromUserMode(saveAddress++);
         u8 expectedByte = *src++;
         if (saveByte != expectedByte)
-            return 0x0E000000 + ((secNo & 0xF) << 12) + i;
+            return 0x0E000000 + (secNo << 12) + i;
     }
     return 0;
 }
@@ -91,7 +93,7 @@ static u32 verifyFlash(u16 secNo, const u8* src, u32 size)
             slot2FlashReadByte(saveAddress++, &saveByte);
             u8 expectedByte = *src++;
             if (saveByte != expectedByte)
-                return 0x0E000000 + ((secNo & 0xF) << 12) + i;
+                return 0x0E000000 + (secNo << 12) + i;
         }
         return 0;
     }
@@ -100,7 +102,7 @@ static u32 verifyFlash(u16 secNo, const u8* src, u32 size)
         u8 saveByte = sav_readSaveByteFromFileFromUserMode(saveAddress++);
         u8 expectedByte = *src++;
         if (saveByte != expectedByte)
-            return 0x0E000000 + ((secNo & 0xF) << 12) + i;
+            return 0x0E000000 + (secNo << 12) + i;
     }
     return 0;
 }
@@ -112,6 +114,7 @@ static u16 eraseFlashChip()
         // Slot2 mode: write only to the cartridge, nothing is backed up to the SD card.
         return slot2FlashEraseChip() ? 0x8000 : 0;
     }
+    sLastFlashSector = 0xFFFFFFFF;
     for (u32 i = 0; i < sizeof(gSaveData); ++i)
     {
         sav_writeSaveByteToFileFromUserMode(i, 0xFF);
@@ -127,6 +130,7 @@ static u16 eraseFlashSector(u16 secNo)
         // slot2FlashEraseSector expects a byte address, not a sector number.
         return slot2FlashEraseSector((u32)secNo << 12) ? 0x8000 : 0;
     }
+    sLastFlashSector = 0xFFFFFFFF;
     for (u32 i = 0; i < (1 << 12); ++i)
     {
         sav_writeSaveByteToFileFromUserMode((secNo << 12) + i, 0xFF);
@@ -174,7 +178,14 @@ static u16 programFlashByte1M(u16 secNo, u32 offset, u8 data)
         return result ? 0x8000 : 0;
     }
     sav_writeSaveByteToFileFromUserMode((secNo << 12) + offset, data);
-    sav_flushSaveFileFromUserMode();
+    // Flush once per sector instead of once per byte: per-byte f_sync is far
+    // too slow for 1M flash (games time out and report a save failure). The
+    // data is still in the FatFs buffer, so verify reads it back correctly.
+    if (sLastFlashSector != secNo)
+    {
+        sav_flushSaveFileFromUserMode();
+        sLastFlashSector = secNo;
+    }
     return 0;
 }
 

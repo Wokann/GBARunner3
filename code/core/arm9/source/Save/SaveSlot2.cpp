@@ -3,6 +3,7 @@
 #include "SaveSlot2.h"
 #include "Save.h"
 #include "Core/Environment.h"
+#include "GbaHeader.h"
 #include <libtwl/mem/memExtern.h>
 #include "VirtualMachine/VMNestedIrq.h"
 #include "cp15.h"
@@ -15,6 +16,27 @@ bool g_useSlot2Save = true;
 SaveType g_slot2SaveType = SAVE_TYPE_NONE;
 bool g_slot2SyncFLASHEraseFinish;
 [[gnu::section(".ewram.bss")]] static u8 sSlot2CurrentBank = 0xFF;
+
+extern GbaHeader gRomHeader;
+
+bool slot2CartridgeGameCodeMatches(void)
+{
+    if (Environment::IsIsNitroEmulator())
+        return false;
+
+    mem_setGbaCartridgeCpu(EXMEMCNT_SLOT2_CPU_ARM9);
+    // GBA cartridge ROM header game code at 0x080000AC (4 bytes, little-endian).
+    // Byte reads to avoid unaligned access; a missing cartridge reads garbage
+    // which will simply not match and falls back to the SD card save path.
+    const u8* cartCode = (const u8*)0x080000AC;
+    u32 cartGameCode = cartCode[0] | (cartCode[1] << 8) |
+                       (cartCode[2] << 16) | ((u32)cartCode[3] << 24);
+    // No cartridge (or no slot2 bus device) reads back all 0xFF / 0x00.
+    // Treat that as "no cartridge" so save handling falls back to SD.
+    if (cartGameCode == 0xFFFFFFFF || cartGameCode == 0)
+        return false;
+    return cartGameCode == gRomHeader.gameCode;
+}
 
 void slot2InitializeSave(const SaveTypeInfo* saveTypeInfo, u32 saveSize)
 {

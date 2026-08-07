@@ -40,6 +40,11 @@ void slot2InitializeSave(const SaveTypeInfo* saveTypeInfo, u32 saveSize);
 void sav_syncSlot2Save(void);
 void sav_performSaveWrite(void);
 
+// Safety check: returns true only when the cartridge in slot2 has the same
+// game code as the ROM file being played. Call before enabling slot2 save so
+// a wrong cartridge falls back to the SD card save path.
+bool slot2CartridgeGameCodeMatches(void);
+
 // SRAM slot2 access. Return true when g_useSlot2Save handled the operation,
 // false to fall back to the original logic. src/dst use AGB addresses
 // (0x0E000000 + offset), matching the SRAM SDK.

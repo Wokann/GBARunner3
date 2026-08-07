@@ -204,7 +204,17 @@ static void loadGbaRom(const char* romPath)
     f_read(&gFile, (void*)ROM_LINEAR_DS_ADDRESS, ROM_LINEAR_SIZE, &br);
 
     if (gExternalPatch.TryLoad(gRomHeader))
-        for(u16 i = 0; i < 512; i++) gExternalPatch.ApplyRomBlockPatches(i, (u8*)ROM_LINEAR_DS_ADDRESS + i * SDC_BLOCK_SIZE);
+    {
+        gLogger->Log(LogLevel::Debug, "Applying external patches to linear rom...\n");
+        if (!gExternalPatch.ApplyLinearPatches())
+        {
+            gLogger->Log(LogLevel::Fatal, "Failed to apply external patches (%u blocks), refusing to boot\n",
+                gExternalPatch.GetFailedBlockCount());
+            // Fail closed: never run a game with partially applied patches.
+            GFX_PLTT_BG_MAIN[0] = 0x1F << 10;
+            while (true);
+        }
+    }
     HarvestMoonPatches().TryApplyPatches(gRomHeader.gameCode);
     if (BadMixerPatch().TryApplyPatch())
     {

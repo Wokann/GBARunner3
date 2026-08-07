@@ -125,6 +125,17 @@ void jit_ensureBlockJitted(void* ptr)
     ic_invalidateAll();
 }
 
+[[gnu::section(".itcm")]]
+void jit_clearBlockJitBits(void* ptr)
+{
+    if ((u32)ptr >= (u32)sdc_cache && (u32)ptr < (u32)sdc_cache[SDC_BLOCK_COUNT])
+    {
+        u32 offset = (u32)ptr - (u32)sdc_cache;
+        offset &= ~SDC_BLOCK_MASK;
+        memset((u8*)gJitState.dynamicRomJitBits + offset / 2 / 8, 0, SDC_BLOCK_SIZE / 2 / 8);
+    }
+}
+
 void jit_init(void)
 {
     memset(&gJitState, 0, sizeof(gJitState));

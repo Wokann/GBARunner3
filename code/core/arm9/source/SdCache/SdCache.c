@@ -8,6 +8,7 @@
 #include "Cpsr.h"
 #include "SdCache.h"
 #include "Patches/ExternalPatch.h"
+#include "JitPatcher/JitCommon.h"
 
 typedef struct
 {
@@ -25,6 +26,13 @@ static u32 sRandomState;
 
 /// @brief Maps sd cache blocks to rom blocks.
 static u16 sCacheBlockToRomBlock[SDC_BLOCK_COUNT];
+
+/// @brief Second-chance (clock) use bit per cache block. A block whose bit is
+///        set was recently loaded or hit and is skipped once during
+///        replacement (the bit is cleared). This keeps hot blocks resident
+///        while letting streamed data (e.g. large patched fonts) age out
+///        naturally instead of occupying the whole cache forever.
+static u8 sCacheBlockUsed[SDC_BLOCK_COUNT];
 
 /// @brief The number of usable blocks in the cache. This can be less than the
 ///        total number of cache blocks when some blocks are permanently loaded.
@@ -44,26 +52,36 @@ extern FIL gExternalPatchFile;
 /// @return The index of the cache block to replace.
 static u32 getBlockToReplace(void)
 {
-    sRandomState = sRandomState * 1566083941u + 2531011u;
-    u32 maxPlusOne = sBlockCount;
-    if (sTabuBlocks[0] != SDC_BLOCK_INVALID)
+    u32 block = 0;
+    // Second-chance: skip recently used blocks (and clear their bit) so they
+    // survive at least one full replacement cycle.
+    for (u32 attempt = 0; attempt < 8; attempt++)
     {
-        maxPlusOne--;
+        sRandomState = sRandomState * 1566083941u + 2531011u;
+        u32 maxPlusOne = sBlockCount;
+        if (sTabuBlocks[0] != SDC_BLOCK_INVALID)
+        {
+            maxPlusOne--;
+        }
+        if (sTabuLevel > 0 && sTabuBlocks[1] != SDC_BLOCK_INVALID)
+        {
+            maxPlusOne--;
+        }
+        block = ((sRandomState >> 16) * maxPlusOne) >> 16;
+        if (block == sTabuBlocks[0])
+        {
+            block = maxPlusOne;
+        }
+        else if (sTabuLevel > 0 && block == sTabuBlocks[1])
+        {
+            block = maxPlusOne + 1;
+        }
+        if (!sCacheBlockUsed[block])
+        {
+            break;
+        }
+        sCacheBlockUsed[block] = 0;
     }
-    if (sTabuLevel > 0 && sTabuBlocks[1] != SDC_BLOCK_INVALID)
-    {
-        maxPlusOne--;
-    }
-    u32 block = ((sRandomState >> 16) * maxPlusOne) >> 16;
-    if (block == sTabuBlocks[0])
-    {
-        block = maxPlusOne;
-    }
-    else if (sTabuLevel > 0 && block == sTabuBlocks[1])
-    {
-        block = maxPlusOne + 1;
-    }
-
     return block;
 }
 
@@ -149,6 +167,7 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     void* currentCacheBlock = sdc_romBlockToCacheBlock[romBlock];
     if (currentCacheBlock)
     {
+        sCacheBlockUsed[((u32)currentCacheBlock - (u32)sdc_cache) / SDC_BLOCK_SIZE] = 1;
         arm_restoreIrqs(irqs);
         return currentCacheBlock;
     }
@@ -181,6 +200,7 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     {
         sdc_romBlockToCacheBlock[oldRomBlock] = NULL;
         sCacheBlockToRomBlock[cacheBlock] = SDC_ROM_BLOCK_INVALID;
+        sCacheBlockUsed[cacheBlock] = 0;
     }
 
     FsWaitToken waitToken;
@@ -205,20 +225,28 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     if (sector != 0)
     {
         irqs = fs_waitForCompletion(&waitToken, true);
-        if (sCurrentFetch.romBlock == romBlock)
-        {
-            finishFetch();
-        }
-        arm_restoreIrqs(irqs);
     }
     else
     {
         fillOutOfBoundsCacheBlock(romBlock, cacheBlock);
+        irqs = arm_disableIrqs();
     }
-    
-    arm_restoreIrqs(irqs);
-    irqs = fs_waitForCompletion(&waitToken, true);
-    externalPatch_applyRomBlock(romBlock, &sdc_cache[cacheBlock][0]);  
+
+    // Apply external patches with irqs disabled to avoid re-entering FatFs
+    // from interrupt context. The block is not published to
+    // sdc_romBlockToCacheBlock yet, so no one can observe half-patched data.
+    externalPatch_applyRomBlock(romBlock, &sdc_cache[cacheBlock][0]);
+    sCacheBlockUsed[cacheBlock] = 1;
+
+    // The block content has changed (rom data and/or external patches).
+    // Clear stale JIT bits so the new content is processed on first execution.
+    jit_clearBlockJitBits(&sdc_cache[cacheBlock][0]);
+
+    if (sector != 0 && sCurrentFetch.romBlock == romBlock)
+    {
+        finishFetch();
+    }
+
     arm_restoreIrqs(irqs);
 
     if (decreaseTabuLevel)
@@ -271,6 +299,7 @@ void sdc_init(void)
     for (u32 i = 0; i < SDC_BLOCK_COUNT; i++)
     {
         sCacheBlockToRomBlock[i] = SDC_ROM_BLOCK_INVALID;
+        sCacheBlockUsed[i] = 0;
     }
 
     sCurrentFetch.cacheBlock = SDC_BLOCK_INVALID;

@@ -79,6 +79,12 @@ void* jit_findBlockEnd(const void* ptr);
 bool jit_isBlockJitted(void* ptr);
 void jit_ensureBlockJitted(void* ptr);
 
+/// @brief Clears the JIT bits for one sd cache block.
+///        Must be called after new content was written to a cache block
+///        (rom load or external patching), otherwise stale bits would make
+///        jit_ensureBlockJitted skip processing the new content.
+void jit_clearBlockJitBits(void* ptr);
+
 /// @brief Initializes the JIT patcher.
 void jit_init(void);
 

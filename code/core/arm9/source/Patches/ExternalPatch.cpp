@@ -646,7 +646,8 @@ bool ExternalPatch::ApplyLinearPatches()
     // patch is loaded, and a corrupted flag must not silently disable the
     // linear patching (see BakePrepatch for the same decision).
     mFailedBlockCount = 0;
-    u32 romFileSize = f_size(&gFile);
+    // Slot2 cart mode: the cart size is the boundary, not the placeholder ROM.
+    u32 romFileSize = mRomSize != 0 ? mRomSize : (u32)f_size(&gFile);
     bool allOk = true;
 
     // The index is sorted, so we can stop as soon as a block >= 512 is hit.

@@ -30,6 +30,8 @@ FIL gSaveFile alignas(32);
 [[gnu::section(".ewram.bss"), gnu::aligned(32)]]
 gba_save_shared_t gGbaSaveShared;
 
+// In EWRAM BSS: the default .bss (vrama) is full and has no headroom.
+[[gnu::section(".ewram.bss")]]
 static DWORD sClusterTable[64];
 // In EWRAM BSS: the default .bss (vrama) is full and has no headroom.
 [[gnu::section(".ewram.bss")]]
@@ -38,6 +40,8 @@ static u32 sSkipSaveCheckInstruction;
 // Slot2 GBA cart save support
 // temporarily
 extern FIL gFile;
+extern bool gSlot2Active;
+extern u32 gSlot2RomSize;
 
 #ifdef GBAR3_HICODE_CACHE_MAPPING
 
@@ -59,6 +63,7 @@ static u32* searchHiCode(const u32* signature, u32 romStart, u32 romEnd)
 
 #endif
 
+[[gnu::section(".ewram")]]
 bool sav_tryPatchFunction(const u32* signature, u32 saveSwiNumber, void* patchFunction)
 {
     u32* function = (u32*)mem_fastSearch16((const u32*)ROM_LINEAR_DS_ADDRESS, ROM_LINEAR_SIZE, signature);
@@ -69,7 +74,7 @@ bool sav_tryPatchFunction(const u32* signature, u32 saveSwiNumber, void* patchFu
     }
     if (!function)
     {
-        u32 romSize = f_size(&gFile);
+        u32 romSize = gSlot2Active ? gSlot2RomSize : (u32)f_size(&gFile);
         function = searchHiCode(signature, ROM_LINEAR_END_GBA_ADDRESS, 0x08000000 + romSize);
     }
 #endif
@@ -102,6 +107,7 @@ static void fillSaveFile(u32 start, u32 end)
     f_sync(&gSaveFile);
 }
 
+[[gnu::section(".ewram")]]
 void sav_initializeSave(const SaveTypeInfo* saveTypeInfo, const char* savePath)
 {
     u32 saveSize = saveTypeInfo ? saveTypeInfo->size : DEFAULT_SAVE_SIZE;
@@ -111,7 +117,7 @@ void sav_initializeSave(const SaveTypeInfo* saveTypeInfo, const char* savePath)
         memset((void*)ISNITRO_SAVE_BUFFER, SAVE_DATA_FILL, ISNITRO_SAVE_BUFFER_SIZE);
     }
     memset(&gSaveFile, 0, sizeof(gSaveFile));
-    if (f_open(&gSaveFile, savePath, FA_OPEN_EXISTING | FA_READ | FA_WRITE) == FR_OK)
+    if (!g_useSlot2Save && savePath && f_open(&gSaveFile, savePath, FA_OPEN_EXISTING | FA_READ | FA_WRITE) == FR_OK)
     {
         bool clusterMapLoaded = false;
         u32 initialSize = f_size(&gSaveFile);
@@ -146,7 +152,7 @@ void sav_initializeSave(const SaveTypeInfo* saveTypeInfo, const char* savePath)
             f_read(&gSaveFile, (void*)ISNITRO_SAVE_BUFFER, saveSize, &read);
         }
     }
-    else if (!Environment::IsIsNitroEmulator())
+    else if (!g_useSlot2Save && savePath && !Environment::IsIsNitroEmulator())
     {
         if (f_open(&gSaveFile, savePath, FA_CREATE_NEW | FA_READ | FA_WRITE) == FR_OK)
         {
@@ -182,7 +188,7 @@ void sav_initializeSave(const SaveTypeInfo* saveTypeInfo, const char* savePath)
     ipc_recvWordDirect();
 }
 
-extern "C" u8 sav_readSaveByteFromFile(u32 saveAddress)
+extern "C" [[gnu::section(".ewram")]] u8 sav_readSaveByteFromFile(u32 saveAddress)
 {
     vm_enableNestedIrqs();
     u8 saveByte;
@@ -193,16 +199,23 @@ extern "C" u8 sav_readSaveByteFromFile(u32 saveAddress)
     }
     else
     {
-        // write to file
-        f_lseek(&gSaveFile, saveAddress);
-        UINT bytesRead = 0;
-        f_read(&gSaveFile, &saveByte, 1, &bytesRead);
+        if (g_useSlot2Save)
+        {
+            saveByte = gSaveData[saveAddress];
+        }
+        else
+        {
+            // write to file
+            f_lseek(&gSaveFile, saveAddress);
+            UINT bytesRead = 0;
+            f_read(&gSaveFile, &saveByte, 1, &bytesRead);
+        }
     }
     vm_disableNestedIrqs();
     return saveByte;
 }
 
-extern "C" void sav_writeSaveByteToFile(u32 saveAddress, u8 data)
+extern "C" [[gnu::section(".ewram")]] void sav_writeSaveByteToFile(u32 saveAddress, u8 data)
 {
     vm_enableNestedIrqs();
     if (Environment::IsIsNitroEmulator())
@@ -212,25 +225,32 @@ extern "C" void sav_writeSaveByteToFile(u32 saveAddress, u8 data)
     }
     else
     {
-        // write to file
-        f_lseek(&gSaveFile, saveAddress);
-        UINT bytesWritten = 0;
-        f_write(&gSaveFile, &data, 1, &bytesWritten);
+        if (g_useSlot2Save)
+        {
+            gSaveData[saveAddress] = data;
+        }
+        else
+        {
+            // write to file
+            f_lseek(&gSaveFile, saveAddress);
+            UINT bytesWritten = 0;
+            f_write(&gSaveFile, &data, 1, &bytesWritten);
+        }
     }
     vm_disableNestedIrqs();
 }
 
-extern "C" void sav_flushSaveFile(void)
+extern "C" [[gnu::section(".ewram")]] void sav_flushSaveFile(void)
 {
     vm_enableNestedIrqs();
-    if (!Environment::IsIsNitroEmulator())
+    if (!Environment::IsIsNitroEmulator() && !g_useSlot2Save)
     {
         f_sync(&gSaveFile);
     }
     vm_disableNestedIrqs();
 }
 
-extern "C" void sav_writeSaveToFile(void)
+extern "C" [[gnu::section(".ewram")]] void sav_writeSaveToFile(void)
 {
     if (gGbaSaveShared.saveDataSize != 0 && !Environment::IsIsNitroEmulator())
     {

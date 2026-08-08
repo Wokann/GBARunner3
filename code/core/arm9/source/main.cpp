@@ -336,8 +336,10 @@ static void handleSave(const char* savePath)
         }
     } 
       
-    if (g_useSlot2Save) {   
-        sav_initializeSave(saveTypeInfo, "_gba/slot2.sav");
+    if (g_useSlot2Save)
+    {
+        // Cart save: no SD save file is involved.
+        sav_initializeSave(saveTypeInfo, nullptr);
     }
     else
         sav_initializeSave(saveTypeInfo, savePath);

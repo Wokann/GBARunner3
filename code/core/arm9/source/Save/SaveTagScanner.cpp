@@ -6,6 +6,8 @@
 #include "SaveFlash.h"
 #include "SaveSram.h"
 #include "SaveTagScanner.h"
+#include "MemCopy.h"
+#include "Slot2.h"
 
 #define SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE  (SAVE_TAG_SCANNER_TEMP_BUFFER_SIZE >> 1)
 
@@ -50,29 +52,62 @@ static constexpr auto sSaveTypeInfos = std::to_array<const SaveTypeInfo>
 const SaveTypeInfo* SaveTagScanner::FindSaveTag(FIL* romFile, u8* tempBuffer, u32& tagRomAddress)
 {
     tagRomAddress = 0;
-    f_rewind(romFile);
-    UINT read;
     u32 curAddr = 0;
-    if (f_read(romFile, tempBuffer, SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE, &read) != FR_OK)
-    {
-        return nullptr;
-    }
     int searchBufPtr = 0;
-    while (curAddr < f_size(romFile))
+    int ptrIncrement = 0;
+
+    if (gSlot2Active)
+    {
+        // Slot2 cart mode: scan the cartridge ROM directly. The mask ROM
+        // cannot be read as a file, so use the cart bus.
+        mem_copy32((void*)(0x08000000 + ptrIncrement), tempBuffer, SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE);
+        ptrIncrement += SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE;
+    }
+    else
+    {
+        f_rewind(romFile);
+        UINT read;
+        if (f_read(romFile, tempBuffer, SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE, &read) != FR_OK)
+        {
+            return nullptr;
+        }
+    }
+
+    while (curAddr < (gSlot2Active ? 0x2000000 : f_size(romFile)))
     {
         if (searchBufPtr == 0)
         {
-            if (f_read(romFile, tempBuffer + SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE,
-                SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE, &read) != FR_OK)
+            if (gSlot2Active)
             {
-                return nullptr;
+                mem_copy32((void*)(0x08000000 + ptrIncrement), tempBuffer + SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE,
+                    SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE);
+                ptrIncrement += SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE;
+            }
+            else
+            {
+                UINT read;
+                if (f_read(romFile, tempBuffer + SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE,
+                    SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE, &read) != FR_OK)
+                {
+                    return nullptr;
+                }
             }
         }
         else if (searchBufPtr == SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE)
         {
-            if (f_read(romFile, tempBuffer, SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE, &read) != FR_OK)
+            if (gSlot2Active)
             {
-                return nullptr;
+                mem_copy32((void*)(0x08000000 + ptrIncrement), tempBuffer,
+                    SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE);
+                ptrIncrement += SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE;
+            }
+            else
+            {
+                UINT read;
+                if (f_read(romFile, tempBuffer, SAVE_TAG_SCANNER_TEMP_BUFFER_HALF_SIZE, &read) != FR_OK)
+                {
+                    return nullptr;
+                }
             }
         }
 

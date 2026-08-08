@@ -130,7 +130,11 @@ arm_func memu_store16Oam
     bx lr
 
 arm_func memu_store16Rom
-    bx lr
+    push {r0-r3, lr}
+    mov r0, r8
+    mov r1, r9
+    bl slot2RtcStore16
+    pop {r0-r3, pc}
 
 arm_func memu_store16Sram
     tst r8, #1

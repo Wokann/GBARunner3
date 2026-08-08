@@ -31,6 +31,8 @@ FIL gSaveFile alignas(32);
 gba_save_shared_t gGbaSaveShared;
 
 static DWORD sClusterTable[64];
+// In EWRAM BSS: the default .bss (vrama) is full and has no headroom.
+[[gnu::section(".ewram.bss")]]
 static u32 sSkipSaveCheckInstruction;
 
 // Slot2 GBA cart save support

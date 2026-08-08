@@ -34,7 +34,10 @@ struct flash_patchinfo_t
     u32* flashPtr;
 };
 
+// In EWRAM BSS: the default .bss (vrama) is full and has no headroom.
+[[gnu::section(".ewram.bss")]]
 static flash_patchinfo_t sPatchInfo;
+[[gnu::section(".ewram.bss")]]
 static flash_v120_type sFlashType;
 [[gnu::section(".ewram.bss")]]
 static u32 sLastFlashSector = 0xFFFFFFFF;

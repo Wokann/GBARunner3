@@ -206,6 +206,44 @@ bool ExternalPatch::ReadRomBlock(u32 romBlock, u8* dst)
 }
 
 [[gnu::section(".ewram")]]
+u32 ExternalPatch::ComputeRomSourceHash()
+{
+    // Hash a small sample of the ROM source (the slot2 cart in cart mode, or
+    // the SD ROM file in SD mode) so a .pre baked from a different source is
+    // detected and rebuilt.
+    u32 romSize = mRomSize != 0 ? mRomSize : (u32)f_size(&gFile);
+    u32 blocks[6];
+    blocks[0] = 0;
+    blocks[1] = 1;
+    blocks[2] = 2;
+    blocks[3] = 3;
+    blocks[4] = romSize > 0 ? (romSize / 2) / SDC_BLOCK_SIZE : 0;
+    blocks[5] = romSize > 0 ? (romSize - 1) / SDC_BLOCK_SIZE : 0;
+
+    u32 crc = 0xFFFFFFFF;
+    for (u32 i = 0; i < 6; i++)
+    {
+        u32 block = blocks[i];
+        if ((u64)block * SDC_BLOCK_SIZE >= romSize)
+            continue;
+        if (gSlot2Active)
+        {
+            mem_copy32((void*)(0x08000000 + block * SDC_BLOCK_SIZE), BAKE_BUF, SDC_BLOCK_SIZE);
+        }
+        else
+        {
+            UINT br;
+            if (f_lseek(&gFile, (FSIZE_t)block * SDC_BLOCK_SIZE) != FR_OK)
+                return 0;
+            if (f_read(&gFile, BAKE_BUF, SDC_BLOCK_SIZE, &br) != FR_OK || br != SDC_BLOCK_SIZE)
+                return 0;
+        }
+        crc = crc32Update(crc, BAKE_BUF, SDC_BLOCK_SIZE);
+    }
+    return crc ^ 0xFFFFFFFF;
+}
+
+[[gnu::section(".ewram")]]
 bool ExternalPatch::TryLoadPrepatch(u32 patchHash)
 {
     if (mIndexCount == 0)
@@ -235,6 +273,9 @@ bool ExternalPatch::TryLoadPrepatch(u32 patchHash)
 
     u32 romSize = mRomSize != 0 ? mRomSize : (u32)f_size(&gFile);
     if (header.romSize != romSize)
+        return reject();
+    u32 romHash = ComputeRomSourceHash();
+    if (romHash == 0 || header.romHash != romHash)
         return reject();
 
     u32 clusterSize = gFile.obj.fs->csize * 512;
@@ -309,6 +350,11 @@ bool ExternalPatch::BakePrepatch(u32 patchHash)
     header.patchHash = patchHash;
     header.patchedBlockCount = mIndexCount;
     header.romSize = mRomSize != 0 ? mRomSize : (u32)f_size(&gFile);
+    header.romHash = ComputeRomSourceHash();
+    if (header.romHash == 0)
+    {
+        return abortBake(1);
+    }
 
     UINT bw;
     if (f_write(&gPrepatchFile, &header, sizeof(header), &bw) != FR_OK || bw != sizeof(header))

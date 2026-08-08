@@ -68,7 +68,7 @@ struct RomBlockIndexEntry
 // to 1 only after everything is on disk + f_sync, so a power loss mid-bake
 // is detected and rebuilt instead of being trusted.
 // ===========================================================================
-#define PREPATCH_FORMAT_VERSION 1
+#define PREPATCH_FORMAT_VERSION 2
 
 #pragma pack(push, 1)
 struct PrepatchHeader
@@ -79,6 +79,9 @@ struct PrepatchHeader
     u32   patchHash;          // CRC32 of the whole .patch file
     u32   patchedBlockCount;
     u32   romSize;            // ROM/cart size used for the out-of-bounds base
+    u32   romHash;            // CRC32 of a sample of the ROM source (the slot2
+                              // cart in cart mode), so a .pre baked from a
+                              // different source (e.g. SD ROM) is rebuilt
 };
 
 struct PrepatchBlockEntry
@@ -109,6 +112,7 @@ private:
     bool TryLoadPrepatch(u32 patchHash);
     bool BakePrepatch(u32 patchHash);
     bool ReadRomBlock(u32 romBlock, u8* dst);
+    u32 ComputeRomSourceHash();
 
     bool            mLoaded = false;
     u32             mIndexCount = 0;

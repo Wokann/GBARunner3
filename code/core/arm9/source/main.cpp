@@ -243,11 +243,17 @@ static void loadGbaCart(const char* romPath)
     // SLOT2 should be accessible now, so copy the first 2MB to Main Memory.
     mem_copy32((void*)0x08000000u, (void*)ROM_LINEAR_DS_ADDRESS, ROM_LINEAR_SIZE);
     // Verify the cart copy: the gamecode at 0xAC must match the cart header.
-    gLogger->Log(LogLevel::Debug, "cartcopy %08X %08X sz%u h%02X 1M%08X 4M%08X\n",
+    u32 sd2m = 0, sd4m = 0;
+    UINT rr;
+    f_lseek(&gFile, 0x200000);
+    f_read(&gFile, &sd2m, 4, &rr);
+    f_lseek(&gFile, 0x400000);
+    f_read(&gFile, &sd4m, 4, &rr);
+    gLogger->Log(LogLevel::Debug, "cartcopy %08X %08X sz%u h%02X sd2M%08X ca2M%08X sd4M%08X ca4M%08X\n",
         gRomHeader.gameCode, *(u32*)(ROM_LINEAR_DS_ADDRESS + 0xAC), gSlot2RomSize,
         ((const u8*)0x08000000)[0x80],
-        *(u32*)(0x08000000 + 0x100000),
-        *(u32*)(0x08000000 + 0x400000));
+        sd2m, *(u32*)(0x08000000 + 0x200000),
+        sd4m, *(u32*)(0x08000000 + 0x400000));
 
     // The cart ROM is a mask ROM and cannot be patched in place: external
     // patches are baked into the .pre sidecar (original blocks read from the
@@ -265,6 +271,8 @@ static void loadGbaCart(const char* romPath)
             while (true);
         }
     }
+    gLogger->Log(LogLevel::Debug, "slot2diag boot size=%u patchBlocks=%u\n",
+        gSlot2RomSize, gExternalPatch.GetBlockCount());
     HarvestMoonPatches().TryApplyPatches(gRomHeader.gameCode);
     if (BadMixerPatch().TryApplyPatch())
     {

@@ -12,54 +12,84 @@ u32 gSlot2RomSize = 0;
 
 extern GbaHeader gRomHeader;
 
-/// @brief Detects the physical cart size by binary searching for the highest
-///        4KB block whose first word still mirrors the start of the cart.
-///        GBA carts mirror their ROM content beyond their physical size
-///        because the upper address lines are not connected.
+// Log format strings land in .rodata (vrama), like the rest of the codebase.
+static const char kProbeFmt[] = "slot2probe %uK %08X m%u\n";
+static const char kProbeSizeFmt[] = "slot2probe size=%u h=%02X\n";
+
+// Boundary probe signature bits (logged with kProbeFmt).
+#define SLOT2_MATCH_ECHO (1u << 0) // each u16 equals its halfword index (GodMode9i)
+#define SLOT2_MATCH_SENT (1u << 1) // fixed 0xFFFE0000 sentinel (older GodMode9i)
+#define SLOT2_MATCH_MIR  (1u << 2) // start of the ROM mirrored at the boundary
+
+/// @brief Detects the physical cart size by scanning power-of-two boundaries.
+///        A GBA cart is a power of two between 512KB and 32MB. Reading past
+///        the end of a cart returns one of several bus signatures depending
+///        on the cart and DS revision. GodMode9i (arm9/source/driveMenu.cpp)
+///        checks whether each u16 equals its own halfword index over an 8KB
+///        region at each boundary; older GodMode9i dumps looked for the fixed
+///        0xFFFE0000 sentinel. Classic GBA hardware mirrors by cart size, so
+///        the start of the ROM also repeats at the exact size boundary. Note
+///        that an 8KB run of 0xFFFF is NOT used as a signature: real retail
+///        ROMs (e.g. Pokemon Sapphire) contain large 0xFF padding regions at
+///        power-of-two offsets, which would false-positive. The first boundary
+///        with any signature is the cart size; if none matches, fall back to
+///        32MB (the whole GBA window).
 [[gnu::section(".ewram")]]
 static u32 detectSlot2RomSize()
 {
-    // Header capacity code at ROM offset 0x80 (most carts write 0x00-0x06,
-    // some write 0x96 for 32MB).
-    u32 headerSize = 0;
-    const u8* cartHeader = (const u8*)0x08000000;
-    u8 sizeCode = cartHeader[0x80];
-    if (sizeCode <= 0x06)
-    {
-        headerSize = 512 * 1024u << sizeCode; // 512KB .. 32MB
-    }
-    else if (sizeCode == 0x96)
-    {
-        headerSize = 32 * 1024 * 1024u;
-    }
+    const u32 base = 0x08000000u;
 
-    // Mirror probe. This can under-estimate on carts that return garbage
-    // instead of mirroring beyond their physical size.
-    u32 firstWord;
-    mem_copy32((void*)0x08000000u, &firstWord, 4);
+    // Start-of-ROM reference for the mirror check.
+    u32 firstWords[4];
+    for (u32 i = 0; i < 4; i++)
+        firstWords[i] = *(const volatile u32*)(base + i * 4);
 
-    u32 lo = 0x00080000u / 4096; // 512KB
-    u32 hi = 0x02000000u / 4096; // 32MB
-    while (lo < hi)
+    u32 size = 512 * 1024;
+    while (size <= 16 * 1024 * 1024)
     {
-        u32 mid = (lo + hi + 1) / 2;
-        u32 testWord;
-        mem_copy32((void*)(0x08000000u + mid * 4096), &testWord, 4);
-        if (testWord == firstWord)
+        const u32 addr = base + size;
+        const volatile u16* p16 = (const volatile u16*)addr;
+        u32 match = 0;
+
+        // Address echo: the whole 8KB region must equal its halfword index.
+        bool echo = true;
+        for (u32 j = 0; j < 0x1000; j++)
         {
-            lo = mid;
+            if (p16[j] != (u16)j)
+            {
+                echo = false;
+                break;
+            }
         }
-        else
-        {
-            hi = mid - 1;
-        }
-    }
-    u32 probeSize = lo * 4096;
+        if (echo)
+            match |= SLOT2_MATCH_ECHO;
 
-    // Take the larger estimate: a too-large size only exposes mirrored
-    // garbage (like the real GBA), while a too-small one would clobber real
-    // cart data with the out-of-bounds fill.
-    return probeSize > headerSize ? probeSize : headerSize;
+        // Fixed sentinel used by the original GodMode9i GBA dump code.
+        if (*(const volatile u32*)addr == 0xFFFE0000u)
+            match |= SLOT2_MATCH_SENT;
+
+        // Classic mirror: the cart repeats from its start at the boundary.
+        bool mirror = true;
+        for (u32 i = 0; i < 4; i++)
+        {
+            if (*(const volatile u32*)(addr + i * 4) != firstWords[i])
+            {
+                mirror = false;
+                break;
+            }
+        }
+        if (mirror)
+            match |= SLOT2_MATCH_MIR;
+
+        gLogger->Log(LogLevel::Debug, kProbeFmt, size / 1024, *(const volatile u32*)addr, match);
+
+        if (match != 0)
+            return size;
+
+        size <<= 1;
+    }
+
+    return 32 * 1024 * 1024;
 }
 
 // Checks if SLOT2 holds a game cart.
@@ -78,6 +108,7 @@ extern "C" [[gnu::section(".ewram")]] bool checkSlot2()
     if (gSlot2Active)
     {
         gSlot2RomSize = detectSlot2RomSize();
+        gLogger->Log(LogLevel::Debug, kProbeSizeFmt, gSlot2RomSize, ((const u8*)0x08000000)[0x80]);
     }
 
     return gSlot2Active;

@@ -11,6 +11,7 @@
 #include "JitPatcher/JitCommon.h"
 #include "MemCopy.h"
 #include "Slot2.h"
+#include "Slot2Diag.h"
 
 typedef struct
 {
@@ -233,6 +234,8 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     FsWaitToken waitToken;
     if (sector != 0)
     {
+        slot2DiagTrace(romBlock, gSlot2Active ? SLOT2DIAG_SRC_PRE : SLOT2DIAG_SRC_SD,
+            SLOT2DIAG_STATE_START);
         fs_readCacheAlignedSectorsAsync(
             gFile.obj.fs->pdrv == DEV_FAT ? FS_DEVICE_DLDI : FS_DEVICE_DSI_SD,
             &sdc_cache[cacheBlock][0], sector,
@@ -252,6 +255,8 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     if (sector != 0)
     {
         irqs = fs_waitForCompletion(&waitToken, true);
+        slot2DiagTrace(romBlock, gSlot2Active ? SLOT2DIAG_SRC_PRE : SLOT2DIAG_SRC_SD,
+            SLOT2DIAG_STATE_DONE);
     }
     else if (gSlot2Active)
     {
@@ -259,17 +264,24 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
         // IRQs stay disabled during the copy so a GBA interrupt cannot
         // re-enter loadRomBlock while the block is being filled.
         irqs = arm_disableIrqs();
+        bool diagOob = romBlock * SDC_BLOCK_SIZE >= gSlot2RomSize;
+        slot2DiagTrace(romBlock, diagOob ? SLOT2DIAG_SRC_OOB : SLOT2DIAG_SRC_CART,
+            SLOT2DIAG_STATE_START);
         mem_copy32((void*)(0x08000000 + (romBlock * SDC_BLOCK_SIZE)), &sdc_cache[cacheBlock][0], SDC_BLOCK_SIZE);
-        if (romBlock * SDC_BLOCK_SIZE >= gSlot2RomSize)
+        if (diagOob)
         {
             // Beyond the physical cart size: emulate GBA out-of-bounds reads
             // instead of keeping the cart's mirrored garbage.
             fillOutOfBoundsCacheBlock(romBlock, cacheBlock);
         }
+        slot2DiagTrace(romBlock, diagOob ? SLOT2DIAG_SRC_OOB : SLOT2DIAG_SRC_CART,
+            SLOT2DIAG_STATE_DONE);
     }
     else
     {
+        slot2DiagTrace(romBlock, SLOT2DIAG_SRC_SD, SLOT2DIAG_STATE_START);
         fillOutOfBoundsCacheBlock(romBlock, cacheBlock);
+        slot2DiagTrace(romBlock, SLOT2DIAG_SRC_SD, SLOT2DIAG_STATE_DONE);
         irqs = arm_disableIrqs();
     }
 

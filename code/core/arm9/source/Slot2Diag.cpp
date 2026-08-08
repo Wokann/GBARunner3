@@ -75,11 +75,30 @@ void slot2DiagVblankHook(void)
     gLogger->Log(LogLevel::Debug, "slot2diag hb irq=%u cart=%u pre=%u oob=%u sd=%u new=%u\n",
         sDiagIrqCount, loads[0], loads[1], loads[2], loads[3], newCount);
 
-    for (u32 i = 0; i < newCount; i++)
+    // Batch the ring dump: 8 entries per line keeps a flush to a handful of
+    // f_syncs instead of one per entry (each f_sync is slow: FAT/dir flush).
+    for (u32 i = 0; i < newCount; i += 8)
     {
-        const Slot2DiagEntry* e = &sDiagRing[(sDiagFlushedHead + i) % SLOT2DIAG_RING_SIZE];
-        gLogger->Log(LogLevel::Debug, "slot2diag %u blk=%u src=%u st=%u\n",
-            e->seq, e->romBlock, e->source, e->state);
+        u32 blocks[8];
+        u32 n = newCount - i;
+        if (n > 8)
+            n = 8;
+        for (u32 j = 0; j < n; j++)
+        {
+            const Slot2DiagEntry* e = &sDiagRing[(sDiagFlushedHead + i + j) % SLOT2DIAG_RING_SIZE];
+            blocks[j] = e->romBlock;
+        }
+        switch (n)
+        {
+            case 1: gLogger->Log(LogLevel::Debug, "s2d %u\n", blocks[0]); break;
+            case 2: gLogger->Log(LogLevel::Debug, "s2d %u %u\n", blocks[0], blocks[1]); break;
+            case 3: gLogger->Log(LogLevel::Debug, "s2d %u %u %u\n", blocks[0], blocks[1], blocks[2]); break;
+            case 4: gLogger->Log(LogLevel::Debug, "s2d %u %u %u %u\n", blocks[0], blocks[1], blocks[2], blocks[3]); break;
+            case 5: gLogger->Log(LogLevel::Debug, "s2d %u %u %u %u %u\n", blocks[0], blocks[1], blocks[2], blocks[3], blocks[4]); break;
+            case 6: gLogger->Log(LogLevel::Debug, "s2d %u %u %u %u %u %u\n", blocks[0], blocks[1], blocks[2], blocks[3], blocks[4], blocks[5]); break;
+            case 7: gLogger->Log(LogLevel::Debug, "s2d %u %u %u %u %u %u %u\n", blocks[0], blocks[1], blocks[2], blocks[3], blocks[4], blocks[5], blocks[6]); break;
+            default: gLogger->Log(LogLevel::Debug, "s2d %u %u %u %u %u %u %u %u\n", blocks[0], blocks[1], blocks[2], blocks[3], blocks[4], blocks[5], blocks[6], blocks[7]); break;
+        }
     }
 
     sDiagFlushedHead = sDiagRingHead;

@@ -243,8 +243,11 @@ static void loadGbaCart(const char* romPath)
     // SLOT2 should be accessible now, so copy the first 2MB to Main Memory.
     mem_copy32((void*)0x08000000u, (void*)ROM_LINEAR_DS_ADDRESS, ROM_LINEAR_SIZE);
     // Verify the cart copy: the gamecode at 0xAC must match the cart header.
-    gLogger->Log(LogLevel::Debug, "cartcopy %08X %08X sz%u\n",
-        gRomHeader.gameCode, *(u32*)(ROM_LINEAR_DS_ADDRESS + 0xAC), gSlot2RomSize);
+    gLogger->Log(LogLevel::Debug, "cartcopy %08X %08X sz%u h%02X 1M%08X 4M%08X\n",
+        gRomHeader.gameCode, *(u32*)(ROM_LINEAR_DS_ADDRESS + 0xAC), gSlot2RomSize,
+        ((const u8*)0x08000000)[0x80],
+        *(u32*)(0x08000000 + 0x100000),
+        *(u32*)(0x08000000 + 0x400000));
 
     // The cart ROM is a mask ROM and cannot be patched in place: external
     // patches are baked into the .pre sidecar (original blocks read from the

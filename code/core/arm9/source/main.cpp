@@ -232,12 +232,14 @@ static void loadGbaRom(const char* romPath)
 
 static void loadGbaCart(const char* romPath)
 {
-    // The clicked ROM file is only a launcher placeholder: open it so the FAT
-    // volume context (gFile.obj.fs) is valid, but all ROM reads come from the
-    // slot2 cart.
+    // The launcher file is optional in physical cartridge mode.
     UINT br;
     memset(&gFile, 0, sizeof(gFile));
-    f_open(&gFile, romPath, FA_OPEN_EXISTING | FA_READ);
+    bool launchFileOpen = f_open(&gFile, romPath, FA_OPEN_EXISTING | FA_READ) == FR_OK;
+    // A physical cartridge supplies the ROM. Only the mounted FAT context
+    // is needed for PRE/cache reads when no launcher placeholder was opened.
+    if (!launchFileOpen)
+        gFile.obj.fs = &gFatFs;
     sdc_init();
 
     // SLOT2 should be accessible now, so copy the first 2MB to Main Memory.
@@ -245,10 +247,13 @@ static void loadGbaCart(const char* romPath)
     // Verify the cart copy: the gamecode at 0xAC must match the cart header.
     u32 sd2m = 0, sd4m = 0;
     UINT rr;
-    f_lseek(&gFile, 0x200000);
-    f_read(&gFile, &sd2m, 4, &rr);
-    f_lseek(&gFile, 0x400000);
-    f_read(&gFile, &sd4m, 4, &rr);
+    if (launchFileOpen)
+    {
+        f_lseek(&gFile, 0x200000);
+        f_read(&gFile, &sd2m, 4, &rr);
+        f_lseek(&gFile, 0x400000);
+        f_read(&gFile, &sd4m, 4, &rr);
+    }
     gLogger->Log(LogLevel::Debug, "cartcopy %08X %08X sz%u h%02X sd2M%08X ca2M%08X sd4M%08X ca4M%08X\n",
         gRomHeader.gameCode, *(u32*)(ROM_LINEAR_DS_ADDRESS + 0xAC), gSlot2RomSize,
         ((const u8*)0x08000000)[0x80],
@@ -569,18 +574,8 @@ extern "C" void gbaRunnerMain(int argc, char* argv[])
         while (1);
     }
 
-    // Real-hardware boot log: always write to /_gba/gbarunner3.log (truncated
-    // each boot) so patch/bake problems can be diagnosed on the device. The
-    // isNitro emulator has its own debug output and is skipped here.
-    if (gLogger == &sNullLogger)
-    {
-        f_mkdir("/_gba"); // ok if it already exists
-        if (sFileLogger.Open("/_gba/gbarunner3.log"))
-        {
-            gLogger = &sFileLogger;
-            gLogger->Log(LogLevel::Debug, "=== GBARunner3 boot log ===\n");
-        }
-    }
+    // Keep normal hardware logging disabled. Periodic FileLogger flushes
+    // serialize SD I/O in IRQ context; the original PRE baker still runs at boot.
 
     // if (Environment::SupportsAgbSemihosting())
         // mountAgbSemihosting();

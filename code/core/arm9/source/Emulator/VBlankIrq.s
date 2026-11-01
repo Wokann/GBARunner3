@@ -4,15 +4,8 @@
 #include "AsmMacros.inc"
 
 arm_func emu_vblankIrq
-    // Slot2 runtime diagnostics: throttled flush of the ROM-load trace ring
-    // to the SD log (see Slot2Diag.cpp). VBlank IRQ is always enabled during
-    // emulation, so this hook doubles as the freeze heartbeat. Runs on every
-    // VBlank; the C hook throttles internally. The periodic SD writes also act
-    // as a keep-alive for the slot2 .pre read path.
-    ldr sp,= dtcmIrqStackEnd
-    push {r0-r3,r12}
-    bl slot2DiagVblankHook
-    pop {r0-r3,r12}
+    // Runtime SD logging is intentionally not flushed from the VBlank IRQ.
+    // Keep the ordinary display/DMA/save work below unchanged.
 
     // For center and mask display capture has to be enabled every frame
     // and the buffers need to be swapped

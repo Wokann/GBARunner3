@@ -23,7 +23,7 @@ arm_func memu_prefetchAbort
     ldr sp,= dtcmHicodeStackEnd
     push {r0-r3, r12, lr}
     mov r0, lr
-    bl hic_mapRomBlock
+    bl memu_mapOrCachedThumbBx
     ldmfd sp, {r0-r3, r12, pc}^
 #else
     b . // bad prefetch abort

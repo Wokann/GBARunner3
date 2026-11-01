@@ -16,7 +16,7 @@ struct
 // Will be filled with HICODE_UNDEFINED_INSTRUCTION for fast prefetching.
 // Must live in EWRAM BSS: the default .bss sits at the very end of the vrama
 // region and has no room for the 2KB (see gbarunner9.ld).
-[[gnu::section(".ewram.bss"), gnu::aligned(32)]]
+[[gnu::section(".ewram.bss"), gnu::aligned(2048)]]
 u32 gHicodeUndefinedData[2048 / 4];
 
 static inline u32 mpu_getRegion4(void)

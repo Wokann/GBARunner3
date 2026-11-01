@@ -1,4 +1,5 @@
 #include "common.h"
+#include "Fat/ReadFailure.h"
 #include <string.h>
 #include "Fat/ff.h"
 #include "Fat/diskio.h"
@@ -17,6 +18,7 @@ typedef struct
 {
     vu16 cacheBlock;
     vu32 romBlock;
+    FsWaitToken* volatile waitToken;
 } SdcFetch;
 
 // The default .bss (vrama) is full: these small statics live in EWRAM BSS.
@@ -108,12 +110,24 @@ static bool isCurrentlyFetching(void)
     return sCurrentFetch.cacheBlock != SDC_BLOCK_INVALID;
 }
 
+[[gnu::section(".ewram"), gnu::noinline]]
 static void finishFetch()
 {
+    // The token is owned by a still-live loadRomBlock stack frame. Nested
+    // IRQ completion must validate that transfer, not a later IPC command.
+    FsWaitToken* token = sCurrentFetch.waitToken;
+    if (!token || !token->transactionComplete || token->readResult != FS_READ_OK)
+    {
+        sCurrentFetch.romBlock = SDC_ROM_BLOCK_INVALID;
+        sCurrentFetch.cacheBlock = SDC_BLOCK_INVALID;
+        sCurrentFetch.waitToken = NULL;
+        fs_stopOnReadFailure();
+    }
     sCacheBlockToRomBlock[sCurrentFetch.cacheBlock] = sCurrentFetch.romBlock;
     sdc_romBlockToCacheBlock[sCurrentFetch.romBlock] = &sdc_cache[sCurrentFetch.cacheBlock][0];
     sCurrentFetch.romBlock = SDC_ROM_BLOCK_INVALID;
     sCurrentFetch.cacheBlock = SDC_BLOCK_INVALID;
+    sCurrentFetch.waitToken = NULL;
     dc_drainWriteBuffer();
 }
 
@@ -234,6 +248,7 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     FsWaitToken waitToken;
     if (sector != 0)
     {
+        sCurrentFetch.waitToken = &waitToken;
         slot2DiagTrace(romBlock, gSlot2Active ? SLOT2DIAG_SRC_PRE : SLOT2DIAG_SRC_SD,
             SLOT2DIAG_STATE_START);
         fs_readCacheAlignedSectorsAsync(
@@ -255,6 +270,7 @@ static void* loadRomBlock(u32 romBlock, u32 cacheBlock)
     if (sector != 0)
     {
         irqs = fs_waitForCompletion(&waitToken, true);
+        if (waitToken.readResult != FS_READ_OK) fs_stopOnReadFailure();
         slot2DiagTrace(romBlock, gSlot2Active ? SLOT2DIAG_SRC_PRE : SLOT2DIAG_SRC_SD,
             SLOT2DIAG_STATE_DONE);
     }
@@ -367,6 +383,7 @@ void sdc_init(void)
     sCurrentFetch.cacheBlock = SDC_BLOCK_INVALID;
     sCurrentFetch.romBlock = SDC_ROM_BLOCK_INVALID;
     gSdCacheIrqForbiddenRomBlockReplacementRange = 0;
+    sCurrentFetch.waitToken = NULL;
     sTabuLevel = 0;
     sTabuBlocks[0] = SDC_BLOCK_INVALID;
     sTabuBlocks[1] = SDC_BLOCK_INVALID;

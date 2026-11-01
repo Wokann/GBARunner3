@@ -8,9 +8,9 @@ class FsIpcService : public ThreadIpcService
     u32 _threadStack[128];
 
     void SetupDldi(const fs_ipc_cmd_t* cmd) const;
-    void DldiReadSectors(const fs_ipc_cmd_t* cmd) const;
+    void DldiReadSectors(fs_ipc_cmd_t* cmd) const;
     void DldiWriteSectors(const fs_ipc_cmd_t* cmd) const;
-    void DsiSdReadSectors(const fs_ipc_cmd_t* cmd) const;
+    void DsiSdReadSectors(fs_ipc_cmd_t* cmd) const;
     void DsiSdWriteSectors(const fs_ipc_cmd_t* cmd) const;
 
 public:

@@ -53,6 +53,13 @@ static u32 soundDma1JumpInstruction;
 [[gnu::section(".ewram.bss")]]
 static u32 soundDma2JumpInstruction;
 
+// Compatibility workaround for the m4a two-FIFO PCM buffer layout.
+// The observed click disappears when reads wrap at the expected buffer end;
+// late VBlank restart is a hypothesis, not a measured hardware root cause.
+#define M4A_PCM_BUF_SIZE 0x630
+[[gnu::section(".ewram.bss")]] static u32 sSoundStart[3];
+[[gnu::section(".ewram.bss")]] static u32 sSoundWrap;
+
 static inline void updateHBlankIrqForChannelStop(void)
 {
     if (!(dma_state.dmaFlags & DMA_FLAG_HBLANK_MASK))
@@ -421,6 +428,9 @@ ITCM_CODE void dma_dmaSound(u32 channel)
     int srcStep = getSrcStep(control);
     if (__builtin_expect(src >= 0x02000000, true))
     {
+        if (sSoundWrap && src - sSoundStart[channel] >= M4A_PCM_BUF_SIZE)
+            src = sSoundStart[channel];
+        dma_state.channels[channel].curSrc = src;
         dma_state.channels[channel].curSrc += srcStep * 16;
         u32 dst = dma_state.channels[channel].curDst;
         dma_immTransferSafe32(src, dst, 16, srcStep, 0);
@@ -446,13 +456,16 @@ ITCM_CODE void dma_dmaSound(u32 channel)
     }
 }
 
-ITCM_CODE static void dmaStartSound(int channel, GbaDmaChannel* dmaIoBase, u32 value)
+[[gnu::section(".ewram"), gnu::noinline]] static void dmaStartSound(int channel, GbaDmaChannel* dmaIoBase, u32 value)
 {
     dmaIoBase->control = value;
     dma_state.dmaFlags |= DMA_FLAG_SOUND(channel);
     vm_forcedIrqMask |= 1 << 16; // arm7 irq
     dma_state.channels[channel].curSrc = dmaIoBase->src;
     dma_state.channels[channel].curDst = dmaIoBase->dst;
+    sSoundStart[channel] = dmaIoBase->src;
+    sSoundWrap = (dma_state.dmaFlags & DMA_FLAG_SOUND_MASK) == DMA_FLAG_SOUND_MASK &&
+        sSoundStart[2] == sSoundStart[1] + M4A_PCM_BUF_SIZE;
 
     if (channel == 1)
     {

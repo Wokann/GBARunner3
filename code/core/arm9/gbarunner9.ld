@@ -326,3 +326,5 @@ SECTIONS
 	.stack 0x80000 : { _stack = .; *(.stack) }
 	/* These must appear regardless of  .  */
 }
+
+ASSERT((gHicodeUndefinedData & 0x7FF) == 0, "Hicode undefined buffer requires 2KiB alignment");

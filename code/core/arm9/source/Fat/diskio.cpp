@@ -40,13 +40,11 @@ extern "C" DRESULT disk_read(BYTE pdrv, BYTE *buff, DWORD sector, UINT count)
 {
     if (pdrv == DEV_FAT)
     {
-        fs_readSectors(FS_DEVICE_DLDI, buff, sector, count);
-        return RES_OK;
+        return fs_readSectors(FS_DEVICE_DLDI, buff, sector, count) ? RES_OK : RES_ERROR;
     }
     else if (pdrv == DEV_SD)
     {
-        fs_readSectors(FS_DEVICE_DSI_SD, buff, sector, count);
-        return RES_OK;
+        return fs_readSectors(FS_DEVICE_DSI_SD, buff, sector, count) ? RES_OK : RES_ERROR;
     }
     else if (pdrv == DEV_PC)
     {

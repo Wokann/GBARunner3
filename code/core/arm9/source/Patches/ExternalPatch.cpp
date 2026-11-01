@@ -441,8 +441,9 @@ bool ExternalPatch::BakePrepatch(u32 patchHash)
         gLogger->Log(LogLevel::Error, "External patch: readback sector lookup failed\n");
         return abortBake(11);
     }
-    fs_readSectors(gFile.obj.fs->pdrv == DEV_FAT ? FS_DEVICE_DLDI : FS_DEVICE_DSI_SD,
-                   BAKE_BUF, checkSector, SDC_BLOCK_SIZE / 512);
+    if (!fs_readSectors(gFile.obj.fs->pdrv == DEV_FAT ? FS_DEVICE_DLDI : FS_DEVICE_DSI_SD,
+                        BAKE_BUF, checkSector, SDC_BLOCK_SIZE / 512))
+        return abortBake(11);
     if (memcmp(BAKE_BUF, &expectedFirstDword, 4) != 0)
     {
         gLogger->Log(LogLevel::Error,

@@ -25,6 +25,18 @@ arm_func emu_hblankIrq
 emu_hblankDmaSkipInstruction:
     bge emu_hblankIrqReturn
 
+    // H0 experiment: a pending IRQ from the previous non-visible line may
+    // be serviced during line 0 HDraw. It is not line 0's HBlank event.
+    // Do not consume one extra HDMA element before the real HBlank arrives.
+    // All other lines keep the original software-DMA path unchanged.
+    cmp lr, #0
+    moveq sp, #0x04000000
+    // Sample DISPSTAT and VCOUNT together: service can cross a scanline.
+    ldreq sp, [sp, #4]
+    tsteq sp, #2
+    cmpeq sp, #0x10000 // line 0 HDraw only; a later line must not be skipped
+    blo emu_hblankIrqReturn
+
     ldr sp,= dtcmIrqStackEnd
     push {r0-r3,r12}
 #ifndef GBAR3_TEST

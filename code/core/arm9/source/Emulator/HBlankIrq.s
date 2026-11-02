@@ -31,9 +31,11 @@ emu_hblankDmaSkipInstruction:
     // All other lines keep the original software-DMA path unchanged.
     cmp lr, #0
     moveq sp, #0x04000000
-    ldreqh sp, [sp, #4]
+    // Sample DISPSTAT and VCOUNT together: service can cross a scanline.
+    ldreq sp, [sp, #4]
     tsteq sp, #2
-    beq emu_hblankIrqReturn
+    cmpeq sp, #0x10000 // line 0 HDraw only; a later line must not be skipped
+    blo emu_hblankIrqReturn
 
     ldr sp,= dtcmIrqStackEnd
     push {r0-r3,r12}

@@ -446,7 +446,7 @@ ITCM_CODE void dma_dmaSound(u32 channel)
     }
 }
 
-ITCM_CODE static void dmaStartSound(int channel, GbaDmaChannel* dmaIoBase, u32 value)
+[[gnu::section(".ewram"), gnu::noinline]] static void dmaStartSound(int channel, GbaDmaChannel* dmaIoBase, u32 value)
 {
     dmaIoBase->control = value;
     dma_state.dmaFlags |= DMA_FLAG_SOUND(channel);

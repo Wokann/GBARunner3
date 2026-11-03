@@ -91,6 +91,9 @@ hicodeLoadFromCache:
     bic r13, r13, #0xFE000000
     mcr p15, 3, r13, c15, c0, 0 // set index
     mrc p15, 3, r13, c15, c3, 0 // read data
+    // LR follows the Thumb SWI; select its halfword from the cached word.
+    tst lr, #2
+    moveq r13, r13, lsr #16
     and r13, r13, #0xFF
     b hicodeContinue
 #endif

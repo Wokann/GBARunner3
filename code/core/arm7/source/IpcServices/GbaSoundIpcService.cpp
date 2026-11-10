@@ -46,6 +46,14 @@ void GbaSoundIpcService::OnMessageReceived(u32 data)
             {
                 gbas_setSoundCntHHi(value);
             }
+            else if (reg == GBA_REG_OFFS_SOUNDBIAS)
+            {
+                gbas_setSoundBiasLo(value);
+            }
+            else if (reg == GBA_REG_OFFS_SOUNDBIAS + 1)
+            {
+                gbas_setSoundBiasHi(value);
+            }
             break;
         }
         case GBA_SOUND_IPC_CMD_GB_REG_WRITE_16:
@@ -58,6 +66,11 @@ void GbaSoundIpcService::OnMessageReceived(u32 data)
             {
                 gbas_setSoundCntHLo(value & 0xFF);
                 gbas_setSoundCntHHi(value >> 8);
+            }
+            else if (reg == GBA_REG_OFFS_SOUNDBIAS)
+            {
+                gbas_setSoundBiasLo(value & 0xFF);
+                gbas_setSoundBiasHi(value >> 8);
             }
             break;
         }

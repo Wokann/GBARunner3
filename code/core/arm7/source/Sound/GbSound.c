@@ -960,8 +960,8 @@ void gbs_writeReg(u32 reg, u8 val)
         case 0x9D:
         case 0x9E:
         case 0x9F:
-            sChannel3WaveData[1 - sChannel3CurPlayBank][(reg & 0xF) << 1] = 127 - ((val & 0xF0) | (val >> 4));
-            sChannel3WaveData[1 - sChannel3CurPlayBank][((reg & 0xF) << 1) + 1] = 127 - (((val & 0xF) << 4) | (val & 0xF));
+            sChannel3WaveData[1 - sChannel3CurPlayBank][(reg & 0xF) << 1] = 120 - (val & 0xF0);
+            sChannel3WaveData[1 - sChannel3CurPlayBank][((reg & 0xF) << 1) + 1] = 120 - ((val & 0xF) << 4);
             break;
     }
 }

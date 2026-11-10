@@ -53,6 +53,15 @@ static u32 soundDma1JumpInstruction;
 [[gnu::section(".ewram.bss")]]
 static u32 soundDma2JumpInstruction;
 
+// G1: m4a PCM DMA wrap. m4a sound buffers are PCM_DMA_BUF_SIZE (0x630) bytes,
+// FIFO B buffer = FIFO A buffer + 0x630. If the game's VBlank restart is late,
+// wrap the DMA source back to its start instead of reading past the buffer.
+#define M4A_PCM_BUF_SIZE 0x630
+[[gnu::section(".ewram.bss")]]
+static u32 sSoundStart[3];
+[[gnu::section(".ewram.bss")]]
+static u32 sSoundWrap;
+
 static inline void updateHBlankIrqForChannelStop(void)
 {
     if (!(dma_state.dmaFlags & DMA_FLAG_HBLANK_MASK))
@@ -154,6 +163,7 @@ ITCM_CODE void dma_dmaTransfer(int channel)
 void dma_init(void)
 {
     memset(&dma_state, 0, sizeof(dma_state));
+    sSoundWrap = 0; // dma_init may also be called after a previous game session.
 
     hblankDmaSkipDuringVblankInstruction = emu_hblankDmaSkipInstruction;
     hblankDmaSkipInstruction = (hblankDmaSkipDuringVblankInstruction & ~0xF0000000) | 0xE0000000; // always condition
@@ -347,7 +357,7 @@ ITCM_CODE void dma_immTransfer32(u32 src, u32 dst, u32 byteCount, int srcStep, i
     dma_transferRegister = ((u32*)dsDst)[(byteCount >> 2) - 1];
 }
 
-ITCM_CODE static void dmaStop(int channel, GbaDmaChannel* dmaIoBase)
+[[gnu::section(".ewram"), gnu::noinline]] static void dmaStop(int channel, GbaDmaChannel* dmaIoBase)
 {
     dma_state.dmaFlags &= ~DMA_FLAG_HBLANK(channel);
     dma_state.dmaFlags &= ~DMA_FLAG_VBLANK(channel);
@@ -359,10 +369,12 @@ ITCM_CODE static void dmaStop(int channel, GbaDmaChannel* dmaIoBase)
     emu_vblankDmaJumpInstructions[channel] = 0;
     if (channel == 1)
     {
+        sSoundWrap = 0;
         emu_soundDma1JumpInstruction = 0;
     }
     else if (channel == 2)
     {
+        sSoundWrap = 0;
         emu_soundDma2JumpInstruction = 0;
     }
 }
@@ -395,6 +407,38 @@ ITCM_CODE static void dmaStartVBlank(int channel, GbaDmaChannel* dmaIoBase, u32 
     emu_vblankDmaJumpInstructions[channel] = vblankDmaJumpInstructions[channel];
 }
 
+// This remains a layout heuristic, not proof that the game uses m4a.
+// Revalidate on DMA start/control writes, not on every FIFO refill.
+[[gnu::section(".ewram"), gnu::noinline]] static bool soundWrapConfigurationAllowed(void)
+{
+    if ((dma_state.dmaFlags & DMA_FLAG_SOUND_MASK) != DMA_FLAG_SOUND_MASK)
+        return false;
+
+    const GbaDmaChannel* dma1 = (const GbaDmaChannel*)&emu_ioRegisters[GBA_REG_OFFS_DMA1SAD];
+    const GbaDmaChannel* dma2 = (const GbaDmaChannel*)&emu_ioRegisters[GBA_REG_OFFS_DMA2SAD];
+    const u32 required = GBA_DMA_CONTROL_ENABLED | GBA_DMA_CONTROL_REPEAT |
+        (GBA_DMA_CONTROL_MODE_SPECIAL << GBA_DMA_CONTROL_MODE_SHIFT);
+    const u32 mask = GBA_DMA_CONTROL_ENABLED | GBA_DMA_CONTROL_REPEAT |
+        (GBA_DMA_CONTROL_MODE_MASK << GBA_DMA_CONTROL_MODE_SHIFT) |
+        (GBA_DMA_CONTROL_SRC_STEP_MASK << GBA_DMA_CONTROL_SRC_STEP_SHIFT) |
+        GBA_DMA_CONTROL_ROM_DREQ;
+    if ((dma1->control & mask) != required || (dma2->control & mask) != required)
+        return false;
+
+    // Use latched destinations, not DAD writes made while DMA remains enabled.
+    // Transfer width, word count and destination step bits are ignored by FIFO DMA.
+    if (dma_state.channels[1].curDst != 0x040000A0 ||
+        dma_state.channels[2].curDst != 0x040000A4)
+        return false;
+
+    const u32 start = sSoundStart[1];
+    if ((start & 3) || sSoundStart[2] != start + M4A_PCM_BUF_SIZE)
+        return false;
+    // Both complete buffers must fit in one canonical GBA RAM region.
+    return (start >= 0x02000000 && start <= 0x02040000 - 2 * M4A_PCM_BUF_SIZE) ||
+        (start >= 0x03000000 && start <= 0x03008000 - 2 * M4A_PCM_BUF_SIZE);
+}
+
 ITCM_CODE void dma_dmaSound(u32 channel)
 {
     dc_drainWriteBuffer();
@@ -421,6 +465,9 @@ ITCM_CODE void dma_dmaSound(u32 channel)
     int srcStep = getSrcStep(control);
     if (__builtin_expect(src >= 0x02000000, true))
     {
+        if (sSoundWrap && src - sSoundStart[channel] == M4A_PCM_BUF_SIZE)
+            src = sSoundStart[channel];
+        dma_state.channels[channel].curSrc = src;
         dma_state.channels[channel].curSrc += srcStep * 16;
         u32 dst = dma_state.channels[channel].curDst;
         dma_immTransferSafe32(src, dst, 16, srcStep, 0);
@@ -446,13 +493,16 @@ ITCM_CODE void dma_dmaSound(u32 channel)
     }
 }
 
-ITCM_CODE static void dmaStartSound(int channel, GbaDmaChannel* dmaIoBase, u32 value)
+// Moved out of ITCM (full): DMACNT start path only, not per-transfer.
+[[gnu::section(".ewram"), gnu::noinline]] static void dmaStartSound(int channel, GbaDmaChannel* dmaIoBase, u32 value)
 {
     dmaIoBase->control = value;
     dma_state.dmaFlags |= DMA_FLAG_SOUND(channel);
     vm_forcedIrqMask |= 1 << 16; // arm7 irq
     dma_state.channels[channel].curSrc = dmaIoBase->src;
     dma_state.channels[channel].curDst = dmaIoBase->dst;
+    sSoundStart[channel] = dmaIoBase->src;
+    sSoundWrap = soundWrapConfigurationAllowed();
 
     if (channel == 1)
     {
@@ -570,6 +620,7 @@ ITCM_CODE void dma_CntHStore16(GbaDmaChannel* dmaIoBase, u32 value)
     {
         // no change in start/stop
         dmaIoBase->control = value;
+        sSoundWrap = soundWrapConfigurationAllowed();
     }
     else if (!(value & GBA_DMA_CONTROL_ENABLED))
     {

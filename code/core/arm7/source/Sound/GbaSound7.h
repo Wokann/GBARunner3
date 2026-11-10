@@ -12,6 +12,8 @@ void gbas_setTimerReload(u32 timer, u16 reload);
 void gbas_setTimerControl(u32 timer, u16 control);
 void gbas_setSoundCntHLo(u8 value);
 void gbas_setSoundCntHHi(u8 value);
+void gbas_setSoundBiasLo(u8 value);
+void gbas_setSoundBiasHi(u8 value);
 void gbas_updateMixer(s16* outLeft, s16* outRight);
 
 #ifdef __cplusplus
